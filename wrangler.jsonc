@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "alveo",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {"enabled": true},
+  "routes": [{"pattern":"alveo.rsenses.com","custom_domain":true}],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api","/api/*","/auth/*"]
+  },
+  "vars": {
+    "MODE":"real",
+    "APP_ORIGIN":"https://alveo.rsenses.com",
+    "SYNC_PROFILE":"free",
+    "SYNC_QUEUE_DAILY_CAP":"2600"
+  },
+  "d1_databases":[{
+    "binding":"DB",
+    "database_name":"alveo",
+    "database_id":"f589b49a-1414-44ca-8c44-bf6e0c547870",
+    "migrations_dir":"migrations"
+  }],
+  "kv_namespaces":[{"binding":"READ_CACHE","id":"dc2b548a8f094c0eb1eff277345ef4e3"}],
+  "queues": {
+    "producers":[{"binding":"SYNC_QUEUE","queue":"alveo-sync"}],
+    "consumers":[{"queue":"alveo-sync","max_batch_size":1,"max_batch_timeout":0,"max_concurrency":1,"max_retries":5}]
+  },
+  "triggers":{"crons":["* * * * *"]}
+}

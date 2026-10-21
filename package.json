@@ -1,0 +1,58 @@
+{
+  "name": "alveo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
+  "scripts": {
+    "predev": "vite build",
+    "predev:real": "vite build",
+    "prepreview": "vite build",
+    "prepreview:real": "vite build",
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "wrangler dev --local --ip 127.0.0.1 --port 8787 -c wrangler.local.jsonc",
+    "dev:web": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:real": "concurrently -k -n api,web \"npm:dev:real:api\" \"npm:dev:web\"",
+    "dev:real:api": "wrangler dev --local --test-scheduled --ip 127.0.0.1 --port 8787 -c wrangler.real-local.jsonc",
+    "setup:real": "wrangler d1 migrations apply DB --local -c wrangler.real-local.jsonc",
+    "preview:real": "wrangler dev --local --ip 127.0.0.1 --port 5173 -c wrangler.real-local.jsonc",
+    "db:migrate": "wrangler d1 migrations apply DB --local -c wrangler.local.jsonc",
+    "db:seed": "wrangler d1 execute DB --local -c wrangler.local.jsonc --file fixtures/seed.sql",
+    "setup": "wrangler d1 migrations apply alveo --remote --config wrangler.jsonc",
+    "setup:local": "npm run db:migrate && npm run db:seed",
+    "build": "tsc --noEmit && vite build",
+    "postbuild": "node scripts/check-build.mjs",
+    "typecheck": "tsc --noEmit",
+    "preview": "npm run build && wrangler dev --local --ip 127.0.0.1 --port 5173 -c wrangler.local.jsonc",
+    "types": "wrangler types -c wrangler.local.jsonc",
+    "test": "vitest run",
+    "profile:d1": "vitest run tests/d1-cost.test.ts --silent=false",
+    "test:sql": "python3 tests/backend-sql-check.py",
+    "test:ui": "vite build && playwright test",
+    "ui:server": "wrangler d1 migrations apply DB --local -c wrangler.local.jsonc --persist-to .wrangler/ui-state && wrangler d1 execute DB --local -c wrangler.local.jsonc --persist-to .wrangler/ui-state --file fixtures/seed.sql && wrangler dev --local -c wrangler.local.jsonc --persist-to .wrangler/ui-state --ip 127.0.0.1 --port 5174 --inspector-port 9230 --var YOUTUBE_API_KEY: --var APP_ORIGIN:http://localhost:5174",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.64.0",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "^9.2.1",
+    "miniflare": "^5.20261019.1-beta",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.5",
+    "wrangler": "^4.151.3"
+  }
+}
