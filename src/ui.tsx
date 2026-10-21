@@ -67,6 +67,12 @@ export function Icon({ name, size = 22 }: { name: string; size?: number }) {
                 <path d="M8 5v14M16 5v14" />
             </>
         ),
+        info: (
+            <>
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v5M12 8h.01" />
+            </>
+        ),
         chevron: <path d="m8 5 7 7-7 7" />,
         trash: (
             <>
@@ -199,6 +205,7 @@ export function VideoCard({
                     </span>
                 )}
             </Link>
+            {extra && <div className="card-extra">{extra}</div>}
             <div className="video-copy">
                 <Link
                     className="channel-label"
@@ -240,7 +247,6 @@ export function VideoCard({
                 >
                     <Icon name="check" size={18} />
                 </button>
-                {extra}
             </div>
         </article>
     );

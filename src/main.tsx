@@ -772,17 +772,17 @@ function Feed() {
     <>
       <PageHeading
         title="Feed"
-        description="Vídeos de tus canales."
         action={<SyncButton onDone={() => setVersion((v) => v + 1)} />}
       />
       {session.mode === "demo" && (
         <div className="demo-banner">
+          <Icon name="info" size={16} />
           <span>
             {session.capabilities.publicData
-              ? "Modo demo: datos públicos reales, sin conectar tu cuenta."
-              : "Modo demo: los cambios se guardan solo en local."}
+              ? "Demo · datos públicos"
+              : "Demo · solo local"}
           </span>
-          <Link to="/watch/aqz-KE-bpKQ">Abrir vídeo de prueba</Link>
+          <Link to="/watch/aqz-KE-bpKQ">Vídeo de prueba</Link>
         </div>
       )}
       <section className="feed-section">
@@ -824,6 +824,9 @@ function Feed() {
           <div className="filter-actions">
             <label className="channel-select">
               <span className="sr-only">Filtrar por canal</span>
+              <span className="select-chevron" aria-hidden="true">
+                <Icon name="chevron" size={16} />
+              </span>
               <select
                 value={channel}
                 onChange={(e) => filter("channelId", e.target.value)}
@@ -895,7 +898,25 @@ function Feed() {
             <VideoCard key={v.id} video={v} onChange={change} />
           ))}
         </div>
-        {busy && <State>Cargando tu feed…</State>}
+        {busy && !videos.length && (
+          <>
+            <div className="video-grid" aria-hidden="true">
+              {Array.from({ length: 6 }, (_, i) => (
+                <div className="video-skeleton" key={i}>
+                  <div className="skeleton-thumb" />
+                  <div className="skeleton-copy">
+                    <div className="skeleton-line short" />
+                    <div className="skeleton-line wide" />
+                    <div className="skeleton-line short" />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <span className="sr-only" role="status">
+              Cargando tu feed…
+            </span>
+          </>
+        )}
         {!busy && !error && videos.length === 0 && (
           <div className="empty-state">
             <h2>
@@ -959,7 +980,6 @@ function Channels() {
     <>
       <PageHeading
         title="Canales"
-        description="Suscripciones y búsqueda."
         action={<SyncButton onDone={() => setVersion((v) => v + 1)} />}
       />
       <div className="search-input">
@@ -981,11 +1001,14 @@ function Channels() {
               className="channel-avatar"
               aria-label={`Abrir ${c.title}`}
             >
-              <img
-                src={c.thumbnailUrl || "/thumbs/01.svg"}
-                alt=""
-                loading="lazy"
-              />
+              {/* Los recursos de demo son miniaturas 16:9, no avatares. */}
+              {c.thumbnailUrl && !c.thumbnailUrl.startsWith("/thumbs/") ? (
+                <img src={c.thumbnailUrl} alt="" loading="lazy" />
+              ) : (
+                <span aria-hidden="true">
+                  {c.title.replace(/^@/, "").slice(0, 1).toUpperCase()}
+                </span>
+              )}
             </Link>
             <div className="channel-copy">
               <h2>
@@ -1051,6 +1074,7 @@ function ChannelPage() {
       </Link>
       <PageHeading
         title={channel?.title || "Canal"}
+        action={<SubscribeChannel key={id} channelId={id!} />}
         description={
           channel?.description ||
           "Vídeos de este canal guardados en la biblioteca."
@@ -1227,9 +1251,6 @@ function Playlists() {
       {data && !data.items.length && (
         <State>Crea tu primera lista o actualiza el catálogo de YouTube.</State>
       )}
-      <p className="muted-note">
-        Las listas locales no se sincronizan con YouTube.
-      </p>
     </>
   );
 }
@@ -1418,6 +1439,37 @@ function PlaylistPage() {
     </>
   );
 }
+function SubscribeChannel({ channelId }: { channelId: string }) {
+  const { session, notify } = useApp();
+  const { data, loading, error } = useResource<{ items: Channel[] }>("/api/channels");
+  const [busy, setBusy] = useState(false);
+  const [subscribed, setSubscribed] = useState(false);
+  const following = subscribed || !!data?.items.some((c) => c.id === channelId && c.subscribed);
+  if (error) return <small role="alert" className="error-text">{error}</small>;
+  if (!loading && !following && session.mode === "real" && !session.capabilities.youtubeWrites)
+    return <Link className="button small secondary" to="/settings">Permitir suscripciones</Link>;
+  return (
+    <button
+      className={`button small ${following ? "secondary" : ""}`}
+      disabled={loading || busy || following}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await api("/api/subscriptions", "POST", { channelId });
+          setSubscribed(true);
+          notify(session.mode === "demo" ? "Canal seguido en la demo" : "Suscripción añadida en YouTube");
+        } catch (e) {
+          notify((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Icon name={following ? "check" : "plus"} size={16} />
+      {loading ? "Cargando…" : following ? "Suscrito" : busy ? "Suscribiendo…" : "Suscribirse"}
+    </button>
+  );
+}
 function WatchRoute() {
   const { id } = useParams();
   return <Watch key={id} id={id!} />;
@@ -1492,6 +1544,7 @@ function Watch({ id }: { id: string }) {
                 </small>
               </div>
             </Link>
+            <SubscribeChannel key={video.channelId} channelId={video.channelId} />
             <div className="watch-actions">
               <button
                 className={`button small ${video.watched ? "" : "secondary"}`}
@@ -1538,7 +1591,10 @@ function Watch({ id }: { id: string }) {
           {save && <SaveVideo id={id} onDone={() => setSave(false)} />}
           <details className="description">
             <summary>
-              Descripción <Icon name="plus" size={16} />
+              Descripción
+              <span className="disclosure">
+                <Icon name="chevron" size={16} />
+              </span>
             </summary>
             <p>{video.description || "No hay descripción disponible."}</p>
           </details>
@@ -1547,13 +1603,8 @@ function Watch({ id }: { id: string }) {
             {video.watched
               ? "Visto en Alveo"
               : video.positionSeconds > 0
-                ? `${Math.round(video.percent)} % · progreso guardado en Alveo`
-                : "Pendiente · Abrir no lo marca como visto"}
-            <span>
-              {video.isLive !== false
-                ? "Duración no confirmada o directo: marcado manual"
-                : "Estado propio, no historial de YouTube"}
-            </span>
+                ? `${Math.round(video.percent)} % guardado en Alveo`
+                : "Pendiente"}
           </div>
           <section className="comments-section">
             <div className="section-title">
@@ -1568,14 +1619,7 @@ function Watch({ id }: { id: string }) {
             </div>
             {comments ? (
               <Comments videoId={id} />
-            ) : (
-              <p className="muted-note">
-                No se cargan hasta que los pidas.
-                {session.mode === "demo" && !session.capabilities.publicData
-                  ? " En esta demo se necesitan datos públicos para verlos."
-                  : " Comentarios reales de YouTube."}
-              </p>
-            )}
+            ) : null}
           </section>
         </div>
       </div>
@@ -1630,11 +1674,13 @@ function Watch({ id }: { id: string }) {
           !suggestions?.items.length && (
             <p className="muted-note">Sin más vídeos conocidos por ahora.</p>
           )}
-        <div className="related-note">
-          {session.capabilities.publicData
-            ? "Búsqueda temática por etiquetas; si faltan, título y hashtags. Solo al solicitarla."
-            : "Solo contenido de tu biblioteca."}
-        </div>
+        {related && (
+          <p className="related-note">
+            {session.capabilities.publicData
+              ? "Por etiquetas o título. Solo al pedirlo."
+              : "Solo contenido de tu biblioteca."}
+          </p>
+        )}
       </aside>
     </div>
   );
@@ -1855,7 +1901,22 @@ function SettingsPage() {
     if (import.meta.env.PROD && "serviceWorker" in navigator)
       navigator.serviceWorker.getRegistration().then((r) => setInstalled(!!r));
   }, []);
-  const params = new URLSearchParams(useLocation().search);
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const privacyOpen = location.hash === "#privacy";
+  const [privacyExpanded, setPrivacyExpanded] = useState(privacyOpen);
+  useEffect(() => {
+    if (!privacyOpen) return;
+    setPrivacyExpanded(true);
+    const timer = setTimeout(() => {
+      const section = document.getElementById("privacy");
+      if (!section) return;
+      const offset = window.innerWidth <= 700 ? 72 : 24;
+      const top = section.getBoundingClientRect().top + window.scrollY - offset;
+      window.scrollTo({ top: Math.max(0, top) });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [privacyOpen]);
   return (
     <>
       <PageHeading title="Configuración" />
@@ -1869,7 +1930,7 @@ function SettingsPage() {
           <h2>Cuenta de YouTube</h2>
           <p>
             {session.mode === "demo"
-              ? "Modo demo. Los cambios no afectan a tu cuenta de YouTube."
+              ? "Modo demo. Los cambios se guardan solo en Alveo."
               : session.connected
                 ? `Conectada: ${session.account?.name}`
                 : "Conecta tu cuenta para importar suscripciones y listas."}
@@ -1929,17 +1990,14 @@ function SettingsPage() {
           )}
           {session.mode === "demo" && (
             <p className="muted-note">
-              Para activar el modo real, sigue los pasos de{" "}
-              <code>README.md</code>. Las credenciales nunca se introducen en el
-              navegador.
+              Para usar tu cuenta real, configura OAuth (README.md).
             </p>
           )}
         </section>
         <section className="settings-card">
           <h2>Marcar como visto</h2>
           <p>
-            Marca el vídeo automáticamente al alcanzar este porcentaje. No
-            sincroniza el historial de YouTube.
+            Marca el vídeo automáticamente al alcanzar este porcentaje.
           </p>
           <form
             onSubmit={async (e) => {
@@ -1971,12 +2029,11 @@ function SettingsPage() {
           </form>
           <p className="muted-note">
             El marcado manual tiene prioridad. Directos y duración desconocida:
-            usa el marcado manual.
+            marcado manual.
           </p>
         </section>
         <section className="settings-card">
           <h2>Apariencia</h2>
-          <p>Tema de la interfaz.</p>
           <div className="theme-options">
             {[
               ["system", "Sistema"],
@@ -1999,13 +2056,10 @@ function SettingsPage() {
           </div>
           <h3>Instalar en Android</h3>
           <p className="muted-note">
-            En Chrome, abre la versión compilada y elige «Añadir a pantalla de
-            inicio».
+            Chrome → «Añadir a pantalla de inicio».
           </p>
           <span className="pill">
-            {installed
-              ? "Service Worker registrado"
-              : "Caché estática disponible en preview"}
+            {installed ? "Service Worker activo" : "Caché lista en preview"}
           </span>
         </section>
         <section className="settings-card">
@@ -2013,9 +2067,9 @@ function SettingsPage() {
           <p>
             {session.mode === "demo"
               ? session.capabilities.publicData
-                ? "La vista de vídeo consulta datos públicos reales. Este botón no importa tu cuenta: eso requiere OAuth."
-                : "En esta demo no se contacta con YouTube ni con feeds RSS."
-              : "Importa cambios de YouTube y descubre vídeos de tus canales."}
+                ? "Actualiza datos públicos. No importa tu cuenta."
+                : "Sin conexión externa en esta demo."
+              : "Importa cambios de YouTube y descubre vídeos nuevos."}
           </p>
           <SyncButton
             onDone={(job) => {
@@ -2072,8 +2126,7 @@ function SettingsPage() {
                 )}
               {isActiveSyncJob(currentJob) && (
                 <small className="sync-summary">
-                  Se actualizará automáticamente cada 3 s. Puedes cerrar la
-                  página: el servidor continúa.
+                  Se actualiza solo. Puedes cerrar la página.
                 </small>
               )}
             </div>
@@ -2113,8 +2166,16 @@ function SettingsPage() {
           </div>
         </section>
       </div>
-      <section className="privacy-section" id="privacy">
-        <h2>Privacidad y datos</h2>
+      <details
+        className="privacy-section"
+        id="privacy"
+        open={privacyExpanded}
+        onToggle={(event) => setPrivacyExpanded(event.currentTarget.open)}
+      >
+        <summary>
+          <h2>Privacidad y datos</h2>
+          <Icon name="chevron" size={18} />
+        </summary>
         <p>
           {session.capabilities.publicData
             ? "Con API pública configurada, metadatos, comentarios y vídeos del canal se consultan en YouTube y se guardan temporalmente en D1. Las suscripciones de prueba y los guardados siguen siendo locales. "
@@ -2166,13 +2227,13 @@ function SettingsPage() {
                 className="button secondary"
                 onClick={() => setConfirm("disconnect")}
               >
-                Desconectar y borrar datos autorizados
+                Desconectar y borrar datos
               </button>
               <button
                 className="danger-link"
                 onClick={() => setConfirm("delete")}
               >
-                Borrar mis datos de Alveo
+                Borrar datos de Alveo
               </button>
               <button
                 className="text-button"
@@ -2221,7 +2282,7 @@ function SettingsPage() {
             )}
           </>
         )}
-      </section>
+      </details>
     </>
   );
 }

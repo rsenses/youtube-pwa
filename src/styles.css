@@ -338,7 +338,7 @@ label > textarea {
 }
 .page-heading {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
     margin-bottom: 20px;
@@ -427,25 +427,37 @@ label > textarea {
 }
 .demo-banner {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px 16px;
+    gap: 8px;
+    min-height: 44px;
     margin-bottom: 16px;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface-2);
+    padding: 4px 12px;
+    border: 1px solid color-mix(in srgb, var(--green) 16%, var(--border));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--green-soft) 34%, var(--surface));
     color: var(--muted);
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 12.5px;
+    line-height: 1.4;
+}
+.demo-banner > svg {
+    flex-shrink: 0;
+    color: var(--green);
+}
+.demo-banner > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .demo-banner > a {
     display: inline-flex;
     align-items: center;
+    flex-shrink: 0;
     min-height: 44px;
+    margin-left: auto;
     color: var(--green);
     font-weight: 600;
+    white-space: nowrap;
 }
 .feed-controls {
     display: flex;
@@ -477,7 +489,7 @@ label > textarea {
     font-weight: 500;
 }
 .type-filters button.active {
-    border-color: var(--green);
+    border-color: transparent;
     background: var(--green-soft);
     color: var(--green);
 }
@@ -507,11 +519,23 @@ label > textarea {
     gap: 8px;
 }
 .channel-select {
+    position: relative;
     display: block;
 }
+.channel-select .select-chevron {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    display: flex;
+    color: var(--muted);
+    pointer-events: none;
+    transform: translateY(-50%) rotate(90deg);
+}
 .channel-select select {
+    appearance: none;
     min-height: 44px;
     max-width: 220px;
+    padding-right: 38px;
     font-size: 14px;
 }
 .video-grid {
@@ -526,6 +550,13 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--surface);
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
+}
+.video-card:hover {
+    border-color: color-mix(in srgb, var(--green) 28%, var(--border));
+    box-shadow: 0 2px 10px #302a280f;
 }
 .thumbnail {
     display: block;
@@ -591,11 +622,13 @@ label > textarea {
 }
 .progress-track {
     position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    right: 8px;
+    bottom: 6px;
+    left: 8px;
+    overflow: hidden;
     height: 3px;
-    background: #ffffff65;
+    border-radius: 999px;
+    background: #ffffff8c;
 }
 .progress-track > span {
     display: block;
@@ -641,10 +674,55 @@ label > textarea {
 }
 .card-actions {
     position: absolute;
-    right: 4px;
-    bottom: 4px;
+    right: 6px;
+    bottom: 6px;
     display: flex;
     flex-direction: column;
+}
+.card-actions .icon-button {
+    position: relative;
+    width: 38px;
+    height: 38px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+}
+.card-actions .icon-button::before,
+.card-extra .icon-button::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+}
+.card-actions .icon-button:hover {
+    border-color: transparent;
+    background: var(--green-soft);
+    color: var(--green);
+}
+.card-actions .icon-button.active {
+    border-color: transparent;
+    background: var(--green-soft);
+    color: var(--green);
+}
+.card-extra {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+}
+.card-extra .icon-button {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    background: #241d1fd9;
+    color: #ffffff;
+}
+.card-extra .icon-button::before {
+    inset: -4px;
+}
+.card-extra .icon-button:hover {
+    background: var(--green);
+    color: var(--on-primary);
 }
 .video-card.compact {
     display: grid;
@@ -671,6 +749,45 @@ label > textarea {
 .video-card.compact .card-actions {
     right: 0;
     bottom: 0;
+}
+.video-card.compact .card-actions .icon-button {
+    width: 34px;
+    height: 34px;
+}
+.video-skeleton {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+}
+.skeleton-thumb {
+    aspect-ratio: 16 / 9;
+    background: var(--surface-2);
+}
+.skeleton-copy {
+    padding: 12px;
+}
+.skeleton-line {
+    height: 10px;
+    margin-bottom: 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+}
+.skeleton-line.wide {
+    width: 88%;
+}
+.skeleton-line.short {
+    width: 44%;
+    margin-bottom: 0;
+}
+.video-skeleton .skeleton-thumb,
+.video-skeleton .skeleton-line {
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+    50% {
+        opacity: 0.55;
+    }
 }
 .is-watched .thumbnail img {
     opacity: 0.75;
@@ -839,9 +956,15 @@ label > textarea {
 .channel-avatar {
     width: 48px;
     height: 48px;
+    display: grid;
+    place-items: center;
     flex-shrink: 0;
+    overflow: hidden;
     border-radius: 50%;
-    background: var(--surface-2);
+    background: var(--green-soft);
+    color: var(--green);
+    font-size: 17px;
+    font-weight: 650;
 }
 .channel-avatar img {
     display: block;
@@ -929,6 +1052,10 @@ label > textarea {
     color: var(--green);
 }
 .playlist-card-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    align-self: stretch;
     min-width: 0;
     flex: 1;
 }
@@ -950,6 +1077,7 @@ label > textarea {
     -webkit-line-clamp: 2;
 }
 .playlist-meta {
+    margin-top: auto;
     color: var(--muted);
     font-size: 12px;
 }
@@ -999,6 +1127,7 @@ label > textarea {
 .settings-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
     gap: 16px;
 }
 .settings-card {
@@ -1152,15 +1281,35 @@ label > textarea {
 .privacy-section {
     max-width: 780px;
     margin-top: 24px;
-    padding: 24px 0 8px;
+    padding: 8px 0;
     border-top: 1px solid var(--border);
     scroll-margin-top: 80px;
 }
-.privacy-section h2 {
-    margin: 0 0 12px;
-    font-size: 20px;
+.privacy-section > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    list-style: none;
+    cursor: pointer;
+}
+.privacy-section > summary::-webkit-details-marker {
+    display: none;
+}
+.privacy-section > summary h2 {
+    margin: 0;
+    font-size: 18px;
     font-weight: 650;
-    letter-spacing: -0.3px;
+    letter-spacing: -0.2px;
+}
+.privacy-section > summary svg {
+    flex-shrink: 0;
+    color: var(--muted);
+    transition: transform 0.15s;
+}
+.privacy-section[open] > summary svg {
+    transform: rotate(90deg);
 }
 .privacy-section p {
     margin: 0 0 12px;
@@ -1332,6 +1481,15 @@ label > textarea {
 .description summary::-webkit-details-marker {
     display: none;
 }
+
+.description summary .disclosure {
+    display: inline-flex;
+    color: var(--muted);
+    transition: transform 0.15s;
+}
+.description[open] summary .disclosure {
+    transform: rotate(90deg);
+}
 .description p {
     margin: 8px 0 0;
     color: var(--muted);
@@ -1349,9 +1507,6 @@ label > textarea {
     color: var(--muted);
     font-size: 12px;
     line-height: 1.5;
-}
-.watch-state-note > span:last-child {
-    margin-left: auto;
 }
 .comments-section {
     padding-top: 16px;
@@ -1380,6 +1535,9 @@ label > textarea {
 }
 .watch-related > .section-title {
     margin-bottom: 12px;
+}
+.watch-related > .button {
+    margin-bottom: 16px;
 }
 .watch-related .video-card {
     margin-bottom: 12px;
@@ -1503,6 +1661,13 @@ label > textarea {
     to {
         opacity: 1;
         transform: translate(-50%, 0);
+    }
+}
+@media (min-width: 701px) {
+    .type-filters button,
+    .segmented button,
+    .channel-select select {
+        min-height: 38px;
     }
 }
 @media (max-width: 1180px) {
@@ -1663,6 +1828,7 @@ label > textarea {
         background: var(--surface);
     }
     .bottom-nav a {
+        position: relative;
         display: flex;
         flex: 1;
         flex-direction: column;
@@ -1680,6 +1846,15 @@ label > textarea {
     .bottom-nav a.active {
         color: var(--green);
         font-weight: 600;
+    }
+    .bottom-nav a.active::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        width: 22px;
+        height: 2px;
+        border-radius: 999px;
+        background: var(--green);
     }
     .toast {
         bottom: calc(76px + env(safe-area-inset-bottom));
@@ -1738,10 +1913,6 @@ label > textarea {
     }
     .watch-actions {
         width: 100%;
-    }
-    .watch-state-note > span:last-child {
-        margin-left: 0;
-        flex-basis: 100%;
     }
     .watch-related {
         padding: 8px 16px 0;

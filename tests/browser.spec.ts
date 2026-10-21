@@ -7,6 +7,32 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+test("suscripción desde vídeo respeta permisos y evita repetir la escritura", async ({ page }) => {
+  let writes = false;
+  let subscribed = false;
+  let requests = 0;
+  await page.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    const session = await response.json();
+    await route.fulfill({ json: { ...session, mode: "real", connected: true,
+      capabilities: { ...session.capabilities, youtubeWrites: writes } } });
+  });
+  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route("**/api/subscriptions", (route) => {
+    requests++;
+    subscribed = true;
+    return route.fulfill({ json: { subscribed } });
+  });
+  await page.goto("/watch/aqz-KE-bpKQ");
+  await expect(page.getByRole("link", { name: "Permitir suscripciones" })).toHaveAttribute("href", "/settings");
+  expect(requests).toBe(0);
+  writes = true;
+  await page.reload();
+  await page.getByRole("button", { name: "Suscribirse", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Suscrito", exact: true })).toBeDisabled();
+  expect(requests).toBe(1);
+});
+
 test("navegación, listas persistentes, ajustes y errores de escritura", async ({
   page,
 }) => {
@@ -455,7 +481,7 @@ test("public comments, replies, paging, avatar fallback and related provenance",
   expect(suggestionRequests).toBe(1);
   await expect(
     page.getByText(
-      "Búsqueda temática por etiquetas; si faltan, título y hashtags. Solo al solicitarla.",
+      "Por etiquetas o título. Solo al pedirlo.",
       { exact: true },
     ),
   ).toBeVisible();
