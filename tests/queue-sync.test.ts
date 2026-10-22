@@ -14,9 +14,11 @@ import {
   getVideo,
   getPlaylistItems,
   externalVideoStatement,
+  listFeed,
   purgeExpiredMetadata,
 } from "../worker/db";
 import { privateVideoStatements } from "../worker/private-metadata";
+import { readRssCheck, writeRssCheck } from "../worker/rss-cache";
 
 let mf: Miniflare, env: Env, account: AccountRow;
 let pending: Array<{ body: SyncMessage; retry?: boolean }>,
@@ -37,12 +39,34 @@ const video = (id: string, privateRead = false) => ({
     description: "Details " + id,
     channelId: privateRead ? "UC" + "c".repeat(22) : channels[0],
     channelTitle: "Provider channel",
-    publishedAt: "2026-10-01T00:00:00Z",
+    publishedAt: new Date().toISOString(),
     liveBroadcastContent: "none",
   },
   contentDetails: { duration: "PT5M" },
   statistics: { viewCount: "12" },
 });
+
+class FakeKv {
+  store = new Map<string, string>();
+  puts: string[] = [];
+  failGet = false;
+  failPut = false;
+
+  async get(key: string): Promise<string | null> {
+    if (this.failGet) throw new Error("KV unavailable");
+    return this.store.get(key) ?? null;
+  }
+
+  async put(
+    key: string,
+    value: string,
+    _options?: { expirationTtl?: number },
+  ): Promise<void> {
+    if (this.failPut) throw new Error("KV quota exceeded");
+    this.puts.push(key);
+    this.store.set(key, value);
+  }
+}
 
 beforeEach(async () => {
   mf = new Miniflare(
@@ -186,13 +210,15 @@ beforeEach(async () => {
         if (failFeed) return new Response("missing", { status: 404 });
         const channel = url.searchParams.get("channel_id")!;
         const base = channel === channels[0] ? 10000 : 10100;
+        const published = new Date(Date.now() - 60000).toISOString();
         const entries = Array.from(
           { length: 15 },
           (_, i) =>
-            `<entry><yt:videoId>${String(base + i).padStart(11, "0")}</yt:videoId><yt:channelId>${channel}</yt:channelId><title>Public ${String(base + i).padStart(11, "0")}</title><published>2026-10-01T00:00:00Z</published></entry>`,
+            `<entry><yt:videoId>${String(base + i).padStart(11, "0")}</yt:videoId><yt:channelId>${channel}</yt:channelId><title>Public ${String(base + i).padStart(11, "0")}</title><published>${published}</published></entry>`,
         ).join("");
         return new Response(
           `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Channel</title>${entries}</feed>`,
+          { headers: { etag: "fixture-" + channel } },
         );
       }
       if (url.pathname.endsWith("/playlists"))
@@ -312,6 +338,13 @@ async function importLibrary() {
 describe("durable queue synchronization", () => {
   it("does not reimport old RSS, unchanged playlists or old details on the next normal update", async () => {
     await importLibrary();
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT count(*) AS n FROM video_discoveries",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
     await env.DB.prepare(
       "UPDATE playlists SET items_synced_at=? WHERE account_id=?",
     )
@@ -359,7 +392,280 @@ describe("durable queue synchronization", () => {
       }>())!.n,
     ).toBe(retained);
   }, 15000);
-  it("bootstraps a reactivated subscription without the publication cutoff", async () => {
+  it("uses per-account KV validators, ignores old entries and writes no per-channel success rows", async () => {
+    const kv = new FakeKv();
+    env.READ_CACHE = kv as unknown as KVNamespace;
+    const conditional: Array<string | null> = [];
+    let withNewEntries = false;
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const url = new URL(String(input));
+        if (!url.pathname.endsWith("/videos.xml")) return original(input, init);
+        const owner = url.searchParams.get("channel_id")!;
+        const ifNoneMatch = new Headers(init.headers).get("if-none-match");
+        conditional.push(ifNoneMatch);
+        if (ifNoneMatch === "fixture-" + owner)
+          return new Response(null, { status: 304 });
+        const suffix = owner === channels[0] ? "1" : "2";
+        const recent = [`Fresh00000${suffix}`];
+        if (withNewEntries) recent.push(`Fresh00000${suffix === "1" ? "3" : "4"}`);
+        const entries = [
+          `<entry><yt:videoId>Old0000000${suffix}</yt:videoId><yt:channelId>${owner}</yt:channelId><title>Old</title><published>2020-01-01T00:00:00Z</published></entry>`,
+          ...recent.map(
+            (id) =>
+              `<entry><yt:videoId>${id}</yt:videoId><yt:channelId>${owner}</yt:channelId><title>Recent ${id}</title><published>${new Date().toISOString()}</published></entry>`,
+          ),
+        ].join("");
+        return new Response(
+          `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Channel</title>${entries}</feed>`,
+          { headers: { etag: "fixture-" + owner } },
+        );
+      }),
+    );
+    await importLibrary();
+    // First check has no KV proof, so no conditional headers are sent.
+    expect(conditional).toEqual([null, null]);
+    expect(kv.puts).toHaveLength(2);
+    expect(
+      await getVideo(env.DB, account.id, "Old00000001", "external"),
+    ).toBeNull();
+    expect(
+      await getVideo(env.DB, account.id, "Old00000002", "external"),
+    ).toBeNull();
+    // D1 channel validators are not consulted; only the account+channel KV
+    // record authorizes a conditional request.
+    await env.DB.prepare("UPDATE channels SET rss_etag='wrong'").run();
+    conditional.length = 0;
+    await startQueuedSync(env, account, "rss");
+    await drain();
+    expect(conditional).toEqual([
+      "fixture-" + channels[0],
+      "fixture-" + channels[1],
+    ]);
+    expect((await queuedSyncStatus(env, account.id))[0]).toMatchObject({
+      status: "success",
+      items: 0,
+      processedChannels: 2,
+    });
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT count(*) AS n FROM sync_state WHERE type LIKE 'queue:rss:%'",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+    // Stale KV records force an unconditional fetch and a new recent entry is
+    // imported; the old entry remains ignored.
+    const stale = new Date(Date.now() - 25 * 3600000).toISOString();
+    for (const channel of channels)
+      await writeRssCheck(env, account.id, channel, {
+        checkedAt: stale,
+        etag: "stale",
+        lastModified: null,
+      });
+    withNewEntries = true;
+    conditional.length = 0;
+    await startQueuedSync(env, account, "rss");
+    await drain();
+    expect(conditional).toEqual([null, null]);
+    expect((await queuedSyncStatus(env, account.id))[0]).toMatchObject({
+      status: "success",
+      items: 2,
+    });
+    expect(
+      await getVideo(env.DB, account.id, "Fresh000003", "external"),
+    ).not.toBeNull();
+    expect(
+      await getVideo(env.DB, account.id, "Fresh000004", "external"),
+    ).not.toBeNull();
+    expect(
+      await getVideo(env.DB, account.id, "Old00000001", "external"),
+    ).toBeNull();
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT count(*) AS n FROM channels WHERE rss_etag='wrong' AND last_synced_at IS NULL",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(2);
+    expect(
+      (await readRssCheck(env, account.id, channels[0], new Date().toISOString()))
+        ?.etag,
+    ).toBe("fixture-" + channels[0]);
+  }, 25000);
+  it("keeps RSS validators isolated between accounts sharing a channel", async () => {
+    const kv = new FakeKv();
+    env.READ_CACHE = kv as unknown as KVNamespace;
+    await startQueuedSync(env, account, "subscriptions");
+    await drain();
+    await env.DB.prepare(
+      "INSERT INTO accounts(id,mode,connected,created_at,updated_at) VALUES ('partner','real',1,?,?)",
+    )
+      .bind(old, old)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO subscriptions(account_id,channel_id,active,created_at,updated_at) VALUES ('partner',?,1,?,?)",
+    )
+      .bind(channels[0], old, old)
+      .run();
+
+    const conditional: Array<string | null> = [];
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        if (String(input).includes("/videos.xml"))
+          conditional.push(new Headers(init.headers).get("if-none-match"));
+        return original(input, init);
+      }),
+    );
+    await startQueuedSync(env, account, "rss");
+    await drain();
+    expect(conditional).toEqual([null, null]);
+    conditional.length = 0;
+    await startQueuedSync(
+      env,
+      (await env.DB.prepare("SELECT * FROM accounts WHERE id='partner'")
+        .first<AccountRow>())!,
+      "rss",
+    );
+    await drain();
+    expect(conditional).toEqual([null]);
+    expect((await queuedSyncStatus(env, "partner"))[0]).toMatchObject({
+      status: "success",
+      items: 0,
+    });
+    expect(kv.puts).toHaveLength(3);
+  }, 20000);
+  it("does not publish KV validators when the durable video write fails", async () => {
+    const kv = new FakeKv();
+    env.READ_CACHE = kv as unknown as KVNamespace;
+    await startQueuedSync(env, account, "subscriptions");
+    await drain();
+    await env.DB.prepare(
+      "UPDATE subscriptions SET active=0 WHERE account_id=? AND channel_id=?",
+    )
+      .bind(account.id, channels[1])
+      .run();
+
+    const originalDb = env.DB;
+    const sqlByStatement = new WeakMap<object, string>();
+    const rawByStatement = new WeakMap<object, D1PreparedStatement>();
+    const track = (
+      statement: D1PreparedStatement,
+      sql: string,
+    ): D1PreparedStatement => {
+      const tracked = new Proxy(statement, {
+        get(target, key) {
+          if (key === "bind")
+            return (...args: unknown[]) =>
+              track(target.bind(...args), sql);
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      sqlByStatement.set(tracked, sql);
+      rawByStatement.set(tracked, statement);
+      return tracked;
+    };
+    let failVideoWrite = true;
+    env.DB = new Proxy(originalDb, {
+      get(target, key) {
+        if (key === "prepare")
+          return (sql: string) => track(target.prepare(sql), sql);
+        if (key === "batch")
+          return async (statements: D1PreparedStatement[]) => {
+            if (
+              failVideoWrite &&
+              statements.some((statement) =>
+                sqlByStatement.get(statement)?.startsWith("INSERT INTO videos"),
+              )
+            ) {
+              failVideoWrite = false;
+              throw new Error("fixture D1 write failure");
+            }
+            return target.batch(
+              statements.map(
+                (statement) => rawByStatement.get(statement) || statement,
+              ),
+            );
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const url = new URL(String(input));
+        if (!url.pathname.endsWith("/videos.xml")) return original(input, init);
+        return new Response(
+          `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Channel</title><entry><yt:videoId>Fail0000001</yt:videoId><yt:channelId>${channels[0]}</yt:channelId><title>Failure fixture</title><published>${new Date().toISOString()}</published></entry></feed>`,
+          { headers: { etag: "failure-etag" } },
+        );
+      }),
+    );
+    await startQueuedSync(env, account, "rss");
+    await deliver(pending.shift()!);
+    expect(kv.puts).toHaveLength(0);
+    expect(
+      await getVideo(env.DB, account.id, "Fail0000001", "external"),
+    ).toBeNull();
+    await drain();
+    expect(kv.puts).toHaveLength(1);
+    expect(
+      await getVideo(env.DB, account.id, "Fail0000001", "external"),
+    ).not.toBeNull();
+  }, 20000);
+  it("writes no video rows or channel success fields on a no-op RSS rerun", async () => {
+    await startQueuedSync(env, account, "subscriptions");
+    await drain();
+    await startQueuedSync(env, account, "rss");
+    await drain();
+    expect(
+      (
+        await env.DB.prepare("SELECT count(*) AS n FROM videos").first<{
+          n: number;
+        }>()
+      )?.n,
+    ).toBe(30);
+
+    const prepared: string[] = [];
+    const originalDb = env.DB;
+    env.DB = new Proxy(originalDb, {
+      get(target, key) {
+        if (key === "prepare")
+          return (sql: string, ...args: unknown[]) => {
+            prepared.push(sql);
+            return (
+              target.prepare as (...values: unknown[]) => D1PreparedStatement
+            )(sql, ...args);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+    await startQueuedSync(env, account, "rss");
+    await drain();
+    expect((await queuedSyncStatus(env, account.id))[0]).toMatchObject({
+      status: "success",
+      items: 0,
+    });
+    expect(
+      prepared.filter((sql) => sql.trimStart().startsWith("INSERT INTO videos")),
+    ).toHaveLength(0);
+    expect(
+      prepared.filter((sql) => sql.trimStart().startsWith("UPDATE channels")),
+    ).toHaveLength(0);
+    expect(prepared.filter((sql) => sql.includes("queue:rss:"))).toHaveLength(
+      0,
+    );
+  }, 15000);
+  it("imports only the frozen 24h window when a subscription is reactivated", async () => {
     await startQueuedSync(env, account, "all");
     await drain();
     await env.DB.prepare(
@@ -367,28 +673,46 @@ describe("durable queue synchronization", () => {
     )
       .bind(account.id, channels[0])
       .run();
-    await startQueuedSync(env, account, "all");
+    await startQueuedSync(env, account, "subscriptions");
+    await drain();
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const url = new URL(String(input));
+        if (
+          url.pathname.endsWith("/videos.xml") &&
+          url.searchParams.get("channel_id") === channels[0]
+        )
+          return new Response(
+            '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Channel</title>' +
+              `<entry><yt:videoId>ReactOld001</yt:videoId><yt:channelId>${channels[0]}</yt:channelId><title>Old</title><published>2020-01-01T00:00:00Z</published></entry>` +
+              `<entry><yt:videoId>ReactNew001</yt:videoId><yt:channelId>${channels[0]}</yt:channelId><title>Recent</title><published>${new Date().toISOString()}</published></entry>` +
+              "</feed>",
+          );
+        return original(input, init);
+      }),
+    );
+    await startQueuedSync(env, account, "rss");
     await drain();
     const row = await env.DB.prepare(
-      "SELECT active,(SELECT last_run_at FROM sync_state WHERE account_id=subscriptions.account_id AND type='queue:rss:' || subscriptions.channel_id) AS rss_synced_at FROM subscriptions WHERE account_id=? AND channel_id=?",
+      "SELECT active FROM subscriptions WHERE account_id=? AND channel_id=?",
     )
       .bind(account.id, channels[0])
-      .first<{ active: number; rss_synced_at: string }>();
+      .first<{ active: number }>();
     expect(row?.active).toBe(1);
-    expect(row?.rss_synced_at).toBeTruthy();
     expect(
-      (await queuedSyncStatus(env, account.id))[0].items,
-    ).toBeGreaterThanOrEqual(15);
+      await getVideo(env.DB, account.id, "ReactOld001", "external"),
+    ).toBeNull();
+    expect(
+      await getVideo(env.DB, account.id, "ReactNew001", "external"),
+    ).not.toBeNull();
+    expect((await queuedSyncStatus(env, account.id))[0]).toMatchObject({
+      status: "success",
+      items: 1,
+    });
   });
-  it("includes the exact last-success boundary without overlap and does not advance a successful watermark after partial failure", async () => {
-    await startQueuedSync(env, account, "all");
-    await drain();
-    const baseline = (await env.DB.prepare(
-      "SELECT last_run_at FROM sync_state WHERE account_id=? AND type='queue:all'",
-    )
-      .bind(account.id)
-      .first<{ last_run_at: string }>())!.last_run_at;
-    const cutoff = Date.parse(baseline);
+  it("imports entries at or after the frozen 24h cutoff and does not advance a successful watermark after partial failure", async () => {
     await externalVideoStatement(
       env.DB,
       {
@@ -398,7 +722,7 @@ describe("durable queue synchronization", () => {
         title: "Known old clip",
         description: "",
         thumbnailUrl: "",
-        publishedAt: new Date(cutoff - 1).toISOString(),
+        publishedAt: "2020-01-01T00:00:00.000Z",
         durationSeconds: 300,
         viewCount: 0,
         isLive: false,
@@ -407,11 +731,13 @@ describe("durable queue synchronization", () => {
       },
       future,
     ).run();
-    await env.DB.prepare(
-      "INSERT INTO video_discoveries(video_id,channel_id,last_seen_at) VALUES (?,?,?)",
-    )
-      .bind("edge0000000", channels[0], new Date().toISOString())
-      .run();
+    const next = await startQueuedSync(env, account, "all");
+    const startedAt = JSON.parse(
+      (await env.DB.prepare("SELECT state FROM sync_jobs WHERE id=?")
+        .bind(next.job.id)
+        .first<{ state: string }>())!.state,
+    ).startedAt as string;
+    const cutoff = Date.parse(startedAt) - 24 * 3600000;
     const original = fetch;
     vi.stubGlobal(
       "fetch",
@@ -423,10 +749,10 @@ describe("durable queue synchronization", () => {
         )
           return new Response(
             '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Channel</title>' +
-              [-1, 0, 1]
+              [-1, -1, 0, 1]
                 .map(
                   (delta, i) =>
-                    `<entry><yt:videoId>edge000000${i}</yt:videoId><yt:channelId>${channels[0]}</yt:channelId><title>Boundary</title><published>${new Date(cutoff + delta).toISOString()}</published></entry>`,
+                    `<entry><yt:videoId>edge000000${i}</yt:videoId><yt:channelId>${channels[0]}</yt:channelId><title>Boundary ${i}</title><published>${new Date(cutoff + (i === 1 ? -1 : delta)).toISOString()}</published></entry>`,
                 )
                 .join("") +
               "</feed>",
@@ -434,16 +760,20 @@ describe("durable queue synchronization", () => {
         return original(input, init);
       }),
     );
-    await startQueuedSync(env, account, "all");
     await drain();
+    // The old entry is present in the feed but was neither imported nor
+    // rewritten, even though it is the same id as a retained row.
     expect(
       (await getVideo(env.DB, account.id, "edge0000000", "external"))?.title,
     ).toBe("Known old clip");
     expect(
       await getVideo(env.DB, account.id, "edge0000001", "external"),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       await getVideo(env.DB, account.id, "edge0000002", "external"),
+    ).not.toBeNull();
+    expect(
+      await getVideo(env.DB, account.id, "edge0000003", "external"),
     ).not.toBeNull();
     const success = (await env.DB.prepare(
       "SELECT last_run_at FROM sync_state WHERE account_id=? AND type='queue:all'",
@@ -511,11 +841,11 @@ describe("durable queue synchronization", () => {
       ).first<{ n: number }>())!.n,
     ).toBe(1);
   });
-  it("renews old expiring metadata as maintenance without reimporting an unchanged playlist", async () => {
-    await importLibrary();
+  it("does not renew old metadata during general sync and keeps the explicit playlist path", async () => {
+    const selected = await importLibrary();
     const soon = new Date(Date.now() + 3600000).toISOString();
     await env.DB.prepare(
-      "UPDATE videos SET expires_at=?,details_expires_at=? WHERE id='00000010000'",
+      "UPDATE videos SET published_at='2020-01-01T00:00:00.000Z',expires_at=?,details_expires_at=? WHERE id='00000010000'",
     )
       .bind(soon, soon)
       .run();
@@ -527,17 +857,32 @@ describe("durable queue synchronization", () => {
     vi.mocked(fetch).mockClear();
     await startQueuedSync(env, account, "all");
     await drain();
-    const urls = vi
+    const generalUrls = vi
       .mocked(fetch)
       .mock.calls.map(([url]) => new URL(String(url)));
     expect(
-      urls.filter((url) => url.pathname.endsWith("/playlistItems")),
+      generalUrls.filter((url) => url.pathname.endsWith("/playlistItems")),
     ).toHaveLength(0);
+    const generalIds = generalUrls
+      .filter((url) => url.pathname.endsWith("/videos"))
+      .flatMap((url) => url.searchParams.get("id")!.split(","));
+    expect(generalIds).not.toContain("priv0000000");
+    expect(generalIds).not.toContain("00000010000");
     expect(
-      urls
-        .filter((url) => url.pathname.endsWith("/videos"))
-        .flatMap((url) => url.searchParams.get("id")!.split(",")),
-    ).toContain("priv0000000");
+      (await env.DB.prepare(
+        "SELECT expires_at FROM account_video_metadata WHERE account_id=? AND video_id='priv0000000'",
+      )
+        .bind(account.id)
+        .first<{ expires_at: string }>())!.expires_at,
+    ).toBe(soon);
+    expect(
+      (await env.DB.prepare(
+        "SELECT expires_at FROM videos WHERE id='00000010000'",
+      ).first<{ expires_at: string }>())!.expires_at,
+    ).toBe(soon);
+
+    await startQueuedSync(env, account, "playlists", true, selected);
+    await drain();
     expect(
       (await env.DB.prepare(
         "SELECT expires_at FROM account_video_metadata WHERE account_id=? AND video_id='priv0000000'",
@@ -546,8 +891,8 @@ describe("durable queue synchronization", () => {
         .first<{ expires_at: string }>())!.expires_at > soon,
     ).toBe(true);
   }, 15000);
-  it("refreshes recent active broadcasts so completed streams stop being live, including private metadata", async () => {
-    await importLibrary();
+  it("refreshes recent active broadcasts within the window and keeps private refresh in the explicit playlist path", async () => {
+    const selected = await importLibrary();
     const ago = new Date(Date.now() - 600000).toISOString();
     await env.DB.prepare(
       "UPDATE videos SET live_broadcast_content='live',is_live=1,details_fetched_at=? WHERE id='00000010000'",
@@ -565,17 +910,25 @@ describe("durable queue synchronization", () => {
       (await getVideo(env.DB, account.id, "00000010000", "external"))
         ?.liveBroadcastContent,
     ).toBe("none");
+    // The general path no longer scans owned metadata.
+    expect(
+      (await getVideo(env.DB, account.id, "priv0000000", "external"))
+        ?.liveBroadcastContent,
+    ).toBe("live");
+
+    await startQueuedSync(env, account, "playlists", true, selected);
+    await drain();
     expect(
       (await getVideo(env.DB, account.id, "priv0000000", "external"))
         ?.liveBroadcastContent,
     ).toBe("none");
     expect(maxStatements).toBeLessThanOrEqual(50);
   }, 15000);
-  it("renews expired old detail fields even after API retention has cleared their values", async () => {
-    await importLibrary();
+  it("does not renew expired old detail fields during general sync and keeps list-scoped renewal", async () => {
+    const selected = await importLibrary();
     const expired = new Date(Date.now() - 26 * 86400000).toISOString();
     await env.DB.prepare(
-      "UPDATE videos SET details_expires_at=?,details_fetched_at=? WHERE id='00000010000'",
+      "UPDATE videos SET published_at='2020-01-01T00:00:00.000Z',details_expires_at=?,details_fetched_at=? WHERE id='00000010000'",
     )
       .bind(expired, expired)
       .run();
@@ -594,11 +947,22 @@ describe("durable queue synchronization", () => {
     expect(
       (await getVideo(env.DB, account.id, "priv0000000", "external"))
         ?.durationSeconds,
+    ).toBeNull();
+    expect(
+      (await getVideo(env.DB, account.id, "00000010000", "external"))
+        ?.durationSeconds,
+    ).toBeNull();
+
+    await startQueuedSync(env, account, "playlists", true, selected);
+    await drain();
+    expect(
+      (await getVideo(env.DB, account.id, "priv0000000", "external"))
+        ?.durationSeconds,
     ).toBe(300);
     expect(
       (await getVideo(env.DB, account.id, "00000010000", "external"))
         ?.durationSeconds,
-    ).toBe(300);
+    ).toBeNull();
     expect(
       (
         await env.DB.prepare(
@@ -1012,6 +1376,20 @@ describe("durable queue synchronization", () => {
       (
         await env.DB.prepare(
           "SELECT count(*) AS n FROM video_discoveries",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+    const feed = await listFeed(
+      env.DB,
+      account.id,
+      { status: "all", channelId: null, cursor: null, limit: 100 },
+      "external",
+    );
+    expect(feed.items).toHaveLength(30);
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT count(*) AS n FROM videos WHERE source='youtube' AND details_expires_at IS NOT NULL",
         ).first<{ n: number }>()
       )?.n,
     ).toBe(30);

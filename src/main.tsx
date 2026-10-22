@@ -169,12 +169,6 @@ function syncJobNextAttempt(value?: string | null) {
     minute: "2-digit",
   }).format(date);
 }
-function mergeSyncJobs(jobs: SyncJob[] | undefined, job: SyncJob) {
-  return [job, ...(jobs || []).filter((item) => item.id !== job.id)].slice(
-    0,
-    10,
-  );
-}
 function syncJobNotice(job: SyncJob) {
   switch (job.status) {
     case "success":
@@ -497,10 +491,6 @@ function App() {
               </Routes>
             )}
           </main>
-          <footer className="page-footer">
-            <span>Alveo</span>
-            <Link to="/settings#privacy">Privacidad</Link>
-          </footer>
         </div>
         <nav className="bottom-nav" aria-label="Navegación móvil">
           {navigation.map(([path, icon, label]) => (
@@ -792,7 +782,6 @@ function Feed() {
               {[
                 ["pending", "Pendientes"],
                 ["all", "Todos"],
-                ["watched", "Vistos"],
               ].map(([value, label]) => (
                 <button
                   className={status === value ? "active" : ""}
@@ -1887,27 +1876,18 @@ function SettingsPage() {
     useApp();
   const {
     data: syncStatus,
-    setData: setSyncStatus,
     error: syncError,
-    refresh: refreshSyncStatus,
   } = useSyncStatus();
   const currentJob =
     syncStatus?.jobs?.find(isActiveSyncJob) || syncStatus?.jobs?.[0];
   const [consent, setConsent] = useState(false);
   const [threshold, setThreshold] = useState(settings.watchThreshold),
     [confirm, setConfirm] = useState("");
-  const [installed, setInstalled] = useState(false);
-  useEffect(() => {
-    if (import.meta.env.PROD && "serviceWorker" in navigator)
-      navigator.serviceWorker.getRegistration().then((r) => setInstalled(!!r));
-  }, []);
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const privacyOpen = location.hash === "#privacy";
-  const [privacyExpanded, setPrivacyExpanded] = useState(privacyOpen);
   useEffect(() => {
     if (!privacyOpen) return;
-    setPrivacyExpanded(true);
     const timer = setTimeout(() => {
       const section = document.getElementById("privacy");
       if (!section) return;
@@ -2054,13 +2034,6 @@ function SettingsPage() {
               </button>
             ))}
           </div>
-          <h3>Instalar en Android</h3>
-          <p className="muted-note">
-            Chrome → «Añadir a pantalla de inicio».
-          </p>
-          <span className="pill">
-            {installed ? "Service Worker activo" : "Caché lista en preview"}
-          </span>
         </section>
         <section className="settings-card">
           <h2>Sincronización</h2>
@@ -2071,20 +2044,6 @@ function SettingsPage() {
                 : "Sin conexión externa en esta demo."
               : "Importa cambios de YouTube y descubre vídeos nuevos."}
           </p>
-          <SyncButton
-            onDone={(job) => {
-              if (job)
-                setSyncStatus((previous) =>
-                  previous
-                    ? {
-                        ...previous,
-                        jobs: mergeSyncJobs(previous.jobs, job),
-                      }
-                    : { runs: [], jobs: [job] },
-                );
-              refreshSyncStatus();
-            }}
-          />
           {currentJob && (
             <div className="sync-run" data-testid="sync-job">
               <div className="sync-run-head">
@@ -2166,16 +2125,8 @@ function SettingsPage() {
           </div>
         </section>
       </div>
-      <details
-        className="privacy-section"
-        id="privacy"
-        open={privacyExpanded}
-        onToggle={(event) => setPrivacyExpanded(event.currentTarget.open)}
-      >
-        <summary>
-          <h2>Privacidad y datos</h2>
-          <Icon name="chevron" size={18} />
-        </summary>
+      <section className="privacy-section" id="privacy">
+        <h2>Privacidad y datos</h2>
         <p>
           {session.capabilities.publicData
             ? "Con API pública configurada, metadatos, comentarios y vídeos del canal se consultan en YouTube y se guardan temporalmente en D1. Las suscripciones de prueba y los guardados siguen siendo locales. "
@@ -2282,7 +2233,7 @@ function SettingsPage() {
             )}
           </>
         )}
-      </details>
+      </section>
     </>
   );
 }

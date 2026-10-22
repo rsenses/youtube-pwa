@@ -6,6 +6,12 @@ import {
   invalidateReads,
   type FeedPage,
 } from "../worker/read-cache";
+import {
+  RSS_RECENT_WINDOW_MS,
+  readRssCheck,
+  rssRecentCutoff,
+  writeRssCheck,
+} from "../worker/rss-cache";
 import type { Env, PlaylistSummary, Video } from "../worker/types";
 
 const QUERY = "types=video,live&status=all&limit=18";
@@ -794,5 +800,114 @@ describe("cachedPlaylists", () => {
     expect(result.cache).toBe("miss");
     expect(result.value).toHaveLength(101);
     expect(kv.puts).toHaveLength(0);
+  });
+});
+
+describe("RSS check cache", () => {
+  const now = "2026-10-22T10:00:00.000Z";
+
+  it("returns validators only for the matching account and channel", async () => {
+    const kv = new FakeKV();
+    const env = makeEnv({ kv });
+    await writeRssCheck(env, "account-a", "channel-1", {
+      checkedAt: now,
+      etag: "etag-a",
+      lastModified: "Wed, 21 Oct 2026 10:00:00 GMT",
+    });
+    expect(await readRssCheck(env, "account-a", "channel-1", now)).toEqual({
+      checkedAt: now,
+      etag: "etag-a",
+      lastModified: "Wed, 21 Oct 2026 10:00:00 GMT",
+    });
+    expect(await readRssCheck(env, "account-b", "channel-1", now)).toBeNull();
+    expect(await readRssCheck(env, "account-a", "channel-2", now)).toBeNull();
+    expect(kv.puts[0].key).toContain(encodeURIComponent("account-a"));
+    expect(kv.puts[0].key).toContain(encodeURIComponent("channel-1"));
+    expect(kv.puts[0].value).not.toContain("token");
+    expect(kv.puts[0].options?.expirationTtl).toBeGreaterThan(
+      RSS_RECENT_WINDOW_MS / 1000,
+    );
+  });
+
+  it("treats missing, failed, malformed and stale records as a full refetch", async () => {
+    const env = makeEnv();
+    expect(await readRssCheck(env, "account-a", "channel-1", now)).toBeNull();
+    await expect(
+      writeRssCheck(env, "account-a", "channel-1", {
+        checkedAt: now,
+        etag: "etag",
+        lastModified: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    const failed = makeEnv({ kv: new FakeKV() });
+    (failed.READ_CACHE as unknown as FakeKV).failGet = true;
+    expect(await readRssCheck(failed, "account-a", "channel-1", now)).toBeNull();
+    (failed.READ_CACHE as unknown as FakeKV).failPut = true;
+    await expect(
+      writeRssCheck(failed, "account-a", "channel-1", {
+        checkedAt: now,
+        etag: "etag",
+        lastModified: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    const kv = new FakeKV();
+    const live = makeEnv({ kv });
+    await writeRssCheck(live, "account-a", "channel-1", {
+      checkedAt: now,
+      etag: "etag",
+      lastModified: null,
+    });
+    const key = kv.puts[0].key;
+    kv.store.set(key, "not-json");
+    expect(await readRssCheck(live, "account-a", "channel-1", now)).toBeNull();
+    kv.store.set(
+      key,
+      JSON.stringify({
+        v: 1,
+        accountId: "account-a",
+        channelId: "channel-1",
+        checkedAt: now,
+        etag: "bad\r\nheader",
+        lastModified: null,
+      }),
+    );
+    expect(await readRssCheck(live, "account-a", "channel-1", now)).toBeNull();
+    kv.store.set(
+      key,
+      JSON.stringify({
+        v: 1,
+        accountId: "someone-else",
+        channelId: "channel-1",
+        checkedAt: now,
+        etag: "etag",
+        lastModified: null,
+      }),
+    );
+    expect(await readRssCheck(live, "account-a", "channel-1", now)).toBeNull();
+
+    const old = new Date(Date.parse(now) - RSS_RECENT_WINDOW_MS - 1).toISOString();
+    await writeRssCheck(live, "account-a", "channel-1", {
+      checkedAt: old,
+      etag: "etag",
+      lastModified: null,
+    });
+    expect(await readRssCheck(live, "account-a", "channel-1", now)).toBeNull();
+
+    const future = new Date(Date.parse(now) + 10 * 60 * 1000).toISOString();
+    await writeRssCheck(live, "account-a", "channel-1", {
+      checkedAt: future,
+      etag: "etag",
+      lastModified: null,
+    });
+    expect(await readRssCheck(live, "account-a", "channel-1", now)).toBeNull();
+  });
+
+  it("freezes the recent import window at 24 hours before the job start", () => {
+    expect(rssRecentCutoff(now)).toBe("2026-10-21T10:00:00.000Z");
+    expect(Date.parse(now) - Date.parse(rssRecentCutoff(now))).toBe(
+      RSS_RECENT_WINDOW_MS,
+    );
   });
 });

@@ -1279,37 +1279,17 @@ label > textarea {
     color: var(--danger);
 }
 .privacy-section {
-    max-width: 780px;
+    width: 100%;
     margin-top: 24px;
-    padding: 8px 0;
+    padding: 24px 0 8px;
     border-top: 1px solid var(--border);
     scroll-margin-top: 80px;
 }
-.privacy-section > summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 52px;
-    list-style: none;
-    cursor: pointer;
-}
-.privacy-section > summary::-webkit-details-marker {
-    display: none;
-}
-.privacy-section > summary h2 {
-    margin: 0;
+.privacy-section h2 {
+    margin: 0 0 12px;
     font-size: 18px;
     font-weight: 650;
     letter-spacing: -0.2px;
-}
-.privacy-section > summary svg {
-    flex-shrink: 0;
-    color: var(--muted);
-    transition: transform 0.15s;
-}
-.privacy-section[open] > summary svg {
-    transform: rotate(90deg);
 }
 .privacy-section p {
     margin: 0 0 12px;

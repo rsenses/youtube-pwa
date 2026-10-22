@@ -33,6 +33,7 @@ import {
 } from "./youtube";
 import { storeVideos } from "./public-youtube";
 import { syncSubscriptionStep, type SyncType } from "./sync";
+import { readRssCheck, rssRecentCutoff, writeRssCheck } from "./rss-cache";
 
 export type SyncMessage = { jobId: string; version: number };
 type Phase =
@@ -51,7 +52,6 @@ interface State {
   startedAt: string;
   lastSuccessAt?: string | null;
   since?: string | null;
-  knownChannels?: string[];
   playlistId?: string;
   generation: string;
   pageToken?: string;
@@ -258,14 +258,6 @@ export async function startQueuedSync(
           .bind(account.id, type)
           .first<{ last_run_at: string }>();
     const lastSuccessAt = previous?.last_run_at || legacy?.last_run_at || null;
-    const known =
-      type === "all" || type === "rss"
-        ? await env.DB.prepare(
-            "SELECT channel_id FROM subscriptions WHERE account_id=? AND active=1 AND last_synced_at IS NOT NULL",
-          )
-            .bind(account.id)
-            .all<{ channel_id: string }>()
-        : { results: [] };
     const state: State = {
       phase:
         type === "rss"
@@ -279,7 +271,6 @@ export async function startQueuedSync(
       lastSuccessAt,
       playlistId,
       metadataScope: playlistId ? "owned" : undefined,
-      knownChannels: (known.results || []).map((row) => row.channel_id),
       since: lastSuccessAt,
       generation: crypto.randomUUID(),
       items: 0,
@@ -337,23 +328,11 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
   if (!s.rss) {
     const row = await env.DB.prepare(
-      `SELECT c.id,c.title,c.rss_etag,c.rss_last_modified,(SELECT last_run_at FROM sync_state WHERE account_id=sub.account_id AND type='queue:rss:' || c.id) AS rss_synced_at,
- EXISTS(SELECT 1 FROM video_discoveries d WHERE d.channel_id=c.id AND d.last_seen_at<=?) AS revalidate FROM subscriptions sub JOIN channels c ON c.id=sub.channel_id
+      `SELECT c.id,c.title FROM subscriptions sub JOIN channels c ON c.id=sub.channel_id
    WHERE sub.account_id=? AND sub.active=1 AND sub.channel_id>? ORDER BY sub.channel_id LIMIT 1`,
     )
-      .bind(
-        isoInDays(-24, new Date(s.startedAt)),
-        account.id,
-        s.rssCursor || "",
-      )
-      .first<{
-        id: string;
-        title: string;
-        rss_etag: string | null;
-        rss_last_modified: string | null;
-        rss_synced_at: string | null;
-        revalidate: number;
-      }>();
+      .bind(account.id, s.rssCursor || "")
+      .first<{ id: string; title: string }>();
     if (!row) {
       s.phase = s.requested === "rss" ? "done" : "metadata";
       return;
@@ -362,29 +341,18 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
     const headers: Record<string, string> = {
       accept: "application/atom+xml,application/xml",
     };
-    const bootstrap =
-      !s.since ||
-      (s.knownChannels
-        ? !s.knownChannels.includes(row.id)
-        : !row.rss_synced_at);
-    if (!bootstrap && !row.revalidate && row.rss_etag)
-      headers["if-none-match"] = row.rss_etag;
-    if (!bootstrap && !row.revalidate && row.rss_last_modified)
-      headers["if-modified-since"] = row.rss_last_modified;
+    // A successful KV record for this account+channel is the only bootstrap
+    // proof. Missing, stale, invalid or failed KV reads force a full fetch.
+    const check = await readRssCheck(env, account.id, row.id, now);
+    if (check?.etag) headers["if-none-match"] = check.etag;
+    if (check?.lastModified)
+      headers["if-modified-since"] = check.lastModified;
     const response = await fetchWithTimeout(channelFeedUrl(row.id), {
       headers,
     });
     if (response.status === 304) {
-      await env.DB.prepare(
-        "UPDATE channels SET last_synced_at=?,rss_failures=0,rss_next_attempt_at=NULL WHERE id=?",
-      )
-        .bind(now, row.id)
-        .run();
-      await env.DB.prepare(
-        "INSERT INTO sync_state(account_id,type,last_run_at,last_status) SELECT account_id,'queue:rss:' || channel_id,?,'success' FROM subscriptions WHERE account_id=? AND channel_id=? AND active=1 ON CONFLICT(account_id,type) DO UPDATE SET last_run_at=excluded.last_run_at,last_status='success'",
-      )
-        .bind(now, account.id, row.id)
-        .run();
+      // A 304 has no durable video writes, so it must not advance a validator
+      // or a success timestamp. The last completed 200 remains the proof.
       s.rssCursor = row.id;
       s.processedChannels++;
       delete s.currentChannelId;
@@ -402,38 +370,11 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
         "incomplete_feed",
         "El feed contiene entradas incompletas.",
       );
-    const maintenanceIds = new Set<string>();
-    if (!bootstrap) {
-      const oldIds = feed.entries
-        .filter((e) => e.publishedAt < s.since!)
-        .map((e) => e.videoId);
-      if (oldIds.length) {
-        const due = await env.DB.prepare(
-          `SELECT v.id,(v.expires_at<=? OR d.video_id IS NULL OR d.last_seen_at<=?) AS due FROM videos v LEFT JOIN video_discoveries d ON d.video_id=v.id AND d.channel_id=?
- WHERE v.id IN (${oldIds.map(() => "?").join(",")})`,
-        )
-          .bind(
-            isoInDays(1, new Date(s.startedAt)),
-            isoInDays(-24, new Date(s.startedAt)),
-            row.id,
-            ...oldIds,
-          )
-          .all<{ id: string; due: number }>();
-        const knownIds = new Set((due.results || []).map((v) => v.id));
-        for (const id of oldIds) if (!knownIds.has(id)) maintenanceIds.add(id);
-        for (const v of due.results || []) if (v.due) maintenanceIds.add(v.id);
-      }
-    }
+    const cutoff = rssRecentCutoff(s.startedAt);
     s.rss = {
       id: row.id,
       title: sanitizeText(feed.title || row.title, 300),
-      entries: bootstrap
-        ? feed.entries
-        : feed.entries.filter(
-            (entry) =>
-              entry.publishedAt >= s.since! ||
-              maintenanceIds.has(entry.videoId),
-          ),
+      entries: feed.entries.filter((entry) => entry.publishedAt >= cutoff),
       offset: 0,
       etag: response.headers.get("etag")?.slice(0, 500) || null,
       modified: response.headers.get("last-modified")?.slice(0, 500) || null,
@@ -441,10 +382,22 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
   }
   const feed = s.rss;
   const entries = feed.entries.slice(feed.offset, feed.offset + 15);
+  const existing = new Set<string>();
+  if (entries.length) {
+    // Only the visible recent page is checked; old entries are never queried.
+    const known = await env.DB.prepare(
+      `SELECT id FROM videos WHERE id IN (${entries.map(() => "?").join(",")})`,
+    )
+      .bind(...entries.map((entry) => entry.videoId))
+      .all<{ id: string }>();
+    for (const row of known.results || []) existing.add(row.id);
+  }
   const statements: D1PreparedStatement[] = [];
   for (const e of entries) {
-    // videos.channel_id is not an FK. Owner channel details are fetched on demand,
-    // avoiding an extra per-entry statement while preserving discovery provenance.
+    if (existing.has(e.videoId)) continue;
+    // yt:channelId is the video owner published by YouTube. Keep that owner
+    // instead of assuming the feed channel owns every entry; feed membership is
+    // derived from videos.channel_id, not from the feed that surfaced it.
     statements.push(
       externalVideoStatement(
         env.DB,
@@ -462,38 +415,20 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
         },
         isoInDays(25),
         now,
+        true,
       ),
-    );
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO video_discoveries(video_id,channel_id,last_seen_at) VALUES (?,?,?)
-   ON CONFLICT(video_id,channel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at WHERE video_discoveries.last_seen_at<=?`,
-      ).bind(e.videoId, feed.id, now, isoInDays(-1)),
     );
   }
   if (statements.length) await env.DB.batch(statements);
   feed.offset += entries.length;
-  s.items += entries.length;
+  s.items += statements.length;
   if (feed.offset >= feed.entries.length) {
-    await env.DB.prepare(
-      `UPDATE channels SET title=?,last_synced_at=?,expires_at=?,purged_at=NULL,
-   rss_etag=?,rss_last_modified=?,rss_failures=0,rss_next_attempt_at=NULL,updated_at=? WHERE id=?`,
-    )
-      .bind(
-        feed.title,
-        now,
-        isoInDays(25),
-        feed.etag,
-        feed.modified,
-        now,
-        feed.id,
-      )
-      .run();
-    await env.DB.prepare(
-      "INSERT INTO sync_state(account_id,type,last_run_at,last_status) SELECT account_id,'queue:rss:' || channel_id,?,'success' FROM subscriptions WHERE account_id=? AND channel_id=? AND active=1 ON CONFLICT(account_id,type) DO UPDATE SET last_run_at=excluded.last_run_at,last_status='success'",
-    )
-      .bind(now, account.id, feed.id)
-      .run();
+    // Publish validators only after every durable video write succeeded.
+    await writeRssCheck(env, account.id, feed.id, {
+      checkedAt: now,
+      etag: feed.etag,
+      lastModified: feed.modified,
+    });
     s.rssCursor = feed.id;
     s.processedChannels++;
     delete s.rss;
@@ -719,6 +654,7 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
   const maintenance = isoInDays(1, new Date(s.startedAt));
   const recent = new Date(Date.parse(s.startedAt) - 3600000).toISOString();
   const live = new Date(Date.parse(s.startedAt) - 300000).toISOString();
+  const cutoff = rssRecentCutoff(s.startedAt);
   const rows = owned
     ? await env.DB.prepare(
         `SELECT pm.video_id AS id FROM account_video_metadata pm WHERE pm.account_id=? AND pm.video_id>?
@@ -747,43 +683,17 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
         )
         .all<{ id: string }>()
     : await env.DB.prepare(
-        `SELECT v.id FROM videos v WHERE v.source<>'fixture' AND v.id>?
- AND (v.expires_at<=? OR v.details_expires_at<=?
- OR (v.published_at>=? AND v.details_fetched_at<=?)
- OR (v.details_fetched_at IS NULL AND (v.published_at>=? OR v.created_at>=? OR v.fetched_at>=? OR EXISTS(
-   SELECT 1 FROM playlist_items pi JOIN playlists p ON p.id=pi.playlist_id
-   WHERE pi.video_id=v.id AND p.account_id=? AND pi.added_at>=?)))
- OR ((v.live_broadcast_content IN ('live','upcoming') OR (v.live_broadcast_content IS NULL AND v.is_live=1)) AND (v.details_fetched_at IS NULL OR v.details_fetched_at<=?)))
- AND (v.source='rss' OR EXISTS(SELECT 1 FROM video_discoveries d WHERE d.video_id=v.id))
- AND (EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1)
-   OR EXISTS(SELECT 1 FROM playlist_items pi JOIN playlists p ON p.id=pi.playlist_id WHERE p.account_id=? AND pi.video_id=v.id)
-   OR EXISTS(SELECT 1 FROM video_discoveries vd CROSS JOIN subscriptions sub WHERE vd.video_id=v.id AND sub.channel_id=vd.channel_id AND sub.account_id=? AND sub.active=1))
+        `SELECT v.id FROM videos v INDEXED BY idx_videos_feed WHERE (v.source='rss' OR (v.source='youtube' AND v.details_expires_at IS NOT NULL)) AND v.id>?
+ AND v.published_at>=?
+ AND (v.expires_at<=? OR v.details_expires_at<=? OR v.details_fetched_at IS NULL OR v.details_fetched_at<=?
+ OR ((v.live_broadcast_content IN ('live','upcoming') OR (v.live_broadcast_content IS NULL AND v.is_live=1)) AND v.details_fetched_at<=?))
+ AND EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1)
  ORDER BY v.id LIMIT 8`,
       )
-        .bind(
-          cursor,
-          maintenance,
-          maintenance,
-          since,
-          recent,
-          since,
-          baseline,
-          s.startedAt,
-          account.id,
-          baseline,
-          live,
-          account.id,
-          account.id,
-          account.id,
-        )
+        .bind(cursor, cutoff, maintenance, maintenance, recent, live, account.id)
         .all<{ id: string }>();
   const ids = (rows.results || []).map((r) => r.id);
   if (!ids.length) {
-    if (!owned) {
-      s.metadataScope = "owned";
-      delete s.metadataCursor;
-      return;
-    }
     await purgeExpiredMetadata(env.DB);
     s.phase = "done";
     return;

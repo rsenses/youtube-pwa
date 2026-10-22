@@ -25,12 +25,14 @@ function videoSourceCondition(scope: VideoScope, alias = "v"): string {
 
 // OAuth playlist metadata is not necessarily public. Share only RSS/public-key
 // verified videos; private imported records remain scoped to their owner's lists.
-// The production Free profile does not import private playlists for other users.
+// Public-key enrichment leaves details_expires_at on the shared row, while
+// OAuth-imported placeholders keep it NULL. The production Free profile does not
+// import private playlists for other users.
 const OWNED_VIDEO_JOIN = `LEFT JOIN account_video_metadata pm ON pm.video_id=v.id AND pm.account_id=?
   AND pm.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
 const ACCOUNT_VIDEO_CONDITION = `(pm.video_id IS NOT NULL OR (v.purged_at IS NULL AND
   (v.source IN ('fixture','rss')
-  OR EXISTS (SELECT 1 FROM video_discoveries vd WHERE vd.video_id=v.id)
+  OR (v.source='youtube' AND v.details_expires_at IS NOT NULL)
   OR EXISTS (SELECT 1 FROM public_read_cache pc WHERE pc.cache_key='public-video:' || v.id
     AND pc.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')))))`;
 
@@ -51,14 +53,12 @@ export function toNullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-// Keep discovery-first join order: a reordered join scanned every subscription
-// for each unrelated video (~300k rows/read). Missing discovery now exits immediately.
-const SUBSCRIBED_VIDEO_CONDITION = `(v.channel_id IN
-  (SELECT channel_id FROM subscriptions WHERE account_id = ? AND active = 1)
-  OR EXISTS (SELECT 1 FROM video_discoveries d CROSS JOIN subscriptions s
-    WHERE d.video_id=v.id AND s.channel_id=d.channel_id AND s.account_id=? AND s.active=1))`;
-const CHANNEL_VIDEO_CONDITION = `(v.channel_id = ? OR EXISTS
-  (SELECT 1 FROM video_discoveries d WHERE d.video_id = v.id AND d.channel_id = ?))`;
+// Feed membership is owner-based: a video belongs to the channel YouTube reports
+// as its owner, never to the feed channel that happened to surface it. The feed
+// scan is pinned to idx_videos_feed so the date-ordered LIMIT stops early.
+const SUBSCRIBED_VIDEO_CONDITION = `v.channel_id IN
+  (SELECT channel_id FROM subscriptions WHERE account_id = ? AND active = 1)`;
+const CHANNEL_VIDEO_CONDITION = `v.channel_id = ?`;
 
 const VIDEO_COLUMNS = `
   v.id AS id,
@@ -377,12 +377,12 @@ export async function listFeed(
   // show known videos even when the user does not follow that channel.
   if (!options.channelId) {
     conditions.unshift(SUBSCRIBED_VIDEO_CONDITION);
-    params.push(accountId, accountId);
+    params.push(accountId);
   }
 
   if (options.channelId) {
     conditions.push(CHANNEL_VIDEO_CONDITION);
-    params.push(options.channelId, options.channelId);
+    params.push(options.channelId);
   }
   if (options.status === "watched") {
     conditions.push("COALESCE(ws.watched, 0) = 1");
@@ -410,7 +410,7 @@ export async function listFeed(
 
   const sql = `
     SELECT * FROM (SELECT ${VIDEO_COLUMNS}, v.published_at AS feedPublishedAt
-    FROM videos v
+    FROM videos v ${options.channelId ? "" : "INDEXED BY idx_videos_feed"}
     LEFT JOIN watch_states ws ON ws.video_id = v.id AND ws.account_id = ?
     ${OWNED_VIDEO_JOIN}
     WHERE ${conditions.join(" AND ")}
@@ -612,11 +612,10 @@ export async function bulkWatchState(
     now,
     accountId,
     accountId,
-    accountId,
   ];
   if (options.scope === "channel" && options.channelId) {
     conditions.push(CHANNEL_VIDEO_CONDITION);
-    params.push(options.channelId, options.channelId);
+    params.push(options.channelId);
   }
   if (options.scope === "before" && options.before) {
     conditions.push("v.published_at < ?");
@@ -1061,14 +1060,42 @@ export function externalVideoStatement(
   video: ExternalVideo,
   expiresAt: string,
   now: string = nowIso(),
+  insertOnly = false,
 ): D1PreparedStatement {
-  return db
-    .prepare(
-      `INSERT INTO videos
+  const insert = `INSERT INTO videos
          (id, channel_id, channel_title, title, description, thumbnail_url, published_at,
           duration_seconds, view_count, source, fetched_at, expires_at, purged_at, created_at, updated_at,
           is_live, details_fetched_at, details_expires_at, live_broadcast_content)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`;
+  const values = [
+    video.id,
+    video.channelId,
+    video.channelTitle,
+    video.title,
+    video.description,
+    video.thumbnailUrl,
+    video.publishedAt,
+    video.durationSeconds,
+    video.viewCount,
+    video.source,
+    now,
+    expiresAt,
+    now,
+    now,
+    video.isLive === undefined ? null : video.isLive ? 1 : 0,
+    video.isLive === undefined ? null : now,
+    video.isLive === undefined ? null : expiresAt,
+    video.liveBroadcastContent ?? null,
+  ] as const;
+  // RSS imports only durable new video rows; an existing row keeps its details
+  // and watch state untouched. The normal upsert remains for metadata reads.
+  if (insertOnly)
+    return db
+      .prepare(`${insert} ON CONFLICT(id) DO NOTHING`)
+      .bind(...values);
+  return db
+    .prepare(
+      `${insert}
        ON CONFLICT(id) DO UPDATE SET
          channel_id = excluded.channel_id,
          channel_title = CASE WHEN excluded.channel_title <> '' THEN excluded.channel_title ELSE videos.channel_title END,
@@ -1092,27 +1119,7 @@ export function externalVideoStatement(
          OR (videos.details_fetched_at IS NULL AND excluded.description<>'' AND videos.description<>excluded.description)
          OR (videos.details_fetched_at IS NULL AND excluded.thumbnail_url<>'' AND videos.thumbnail_url<>excluded.thumbnail_url)`,
     )
-    .bind(
-      video.id,
-      video.channelId,
-      video.channelTitle,
-      video.title,
-      video.description,
-      video.thumbnailUrl,
-      video.publishedAt,
-      video.durationSeconds,
-      video.viewCount,
-      video.source,
-      now,
-      expiresAt,
-      now,
-      now,
-      video.isLive === undefined ? null : video.isLive ? 1 : 0,
-      video.isLive === undefined ? null : now,
-      video.isLive === undefined ? null : expiresAt,
-      video.liveBroadcastContent ?? null,
-      isoInDays(3, new Date(now)),
-    );
+    .bind(...values, isoInDays(3, new Date(now)));
 }
 
 export interface ExternalChannel {

@@ -18,6 +18,7 @@ import {
   upsertRemoteSubscription,
 } from "../worker/db";
 import { readLimitedText } from "../worker/http";
+import { writeRssCheck } from "../worker/rss-cache";
 import { getPublicVideo, getPublicSuggestions } from "../worker/public-youtube";
 import { listCommentThreads, listCommentReplies } from "../worker/youtube";
 
@@ -311,7 +312,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     ).toBe(0);
     vi.unstubAllGlobals();
   });
-  it("deduplicates discovered videos without overwriting manual watch state", async () => {
+  it("deduplicates RSS video upserts without overwriting manual watch state", async () => {
     const video = {
       id: "M7lc1UVf-VE",
       channelId: "UCnew",
@@ -619,7 +620,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       delete env.YOUTUBE_API_KEY;
     }
   });
-  it("discovers and lists 113 subscriptions with bounded RSS concurrency and no duplicate or misattributed videos", async () => {
+  it("discovers and lists 113 subscriptions with bounded RSS concurrency and owner-based feed membership", async () => {
     const now = new Date().toISOString();
     await env.DB.prepare(
       `INSERT INTO accounts (id,mode,name,connected,scopes,created_at,updated_at) VALUES ('rss-test','real','RSS fixture',1,'',?,?)`,
@@ -660,7 +661,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         );
         const ownerId = id.endsWith("00") ? "UCdifferentOwner" : id;
         return new Response(
-          `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><id>yt:channel:${id}</id><title>RSS fixture</title><entry><yt:videoId>${videoId}</yt:videoId><yt:channelId>${ownerId}</yt:channelId><author><name>Video owner fixture</name></author><title>RSS fixture video</title><published>2025-01-01T00:00:00Z</published></entry></feed>`,
+          `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><id>yt:channel:${id}</id><title>RSS fixture</title><entry><yt:videoId>${videoId}</yt:videoId><yt:channelId>${ownerId}</yt:channelId><author><name>Video owner fixture</name></author><title>RSS fixture video</title><published>${new Date().toISOString()}</published></entry></feed>`,
           { headers: { etag: "fixture-v1" } },
         );
       }),
@@ -682,7 +683,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         { status: "all", channelId: null, cursor: null, limit: 150 },
         "external",
       );
-      expect(feed.items).toHaveLength(113);
+      expect(feed.items).toHaveLength(111);
       const channels = await listChannels(
         env.DB,
         rssAccount.id,
@@ -692,16 +693,41 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       expect(channels.filter((channel) => channel.subscribed)).toHaveLength(
         113,
       );
-      expect(feed.items.find((v) => v.id === "00000000000")?.channelId).toBe(
-        "UCdifferentOwner",
+      // Entries 0 and 100 declare UCdifferentOwner as their owner (their feed
+      // channel ids happen to end with "00"). They keep that owner and do not
+      // leak into UCbatch00's subscription feed.
+      expect(feed.items.map((v) => v.id)).not.toContain("00000000000");
+      expect(feed.items.map((v) => v.id)).not.toContain("00000000100");
+      const misattributed = await getVideo(
+        env.DB,
+        rssAccount.id,
+        "00000000000",
+        "external",
       );
+      expect(misattributed?.channelId).toBe("UCdifferentOwner");
+      expect(misattributed?.watched).toBe(false);
       const channelFeed = await listFeed(
         env.DB,
         rssAccount.id,
         { status: "all", channelId: "UCbatch00", cursor: null, limit: 20 },
         "external",
       );
-      expect(channelFeed.items.map((v) => v.id)).toEqual(["00000000000"]);
+      expect(channelFeed.items).toEqual([]);
+      const ownerFeed = await listFeed(
+        env.DB,
+        rssAccount.id,
+        {
+          status: "all",
+          channelId: "UCdifferentOwner",
+          cursor: null,
+          limit: 20,
+        },
+        "external",
+      );
+      expect(ownerFeed.items.map((v) => v.id)).toEqual([
+        "00000000100",
+        "00000000000",
+      ]);
       expect(
         await bulkWatchState(env.DB, rssAccount.id, {
           scope: "all",
@@ -709,16 +735,48 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
           before: null,
           watched: true,
         }),
-      ).toBe(113);
+      ).toBe(111);
       const again = await handleSync(env, rssAccount, "rss");
       expect(again.items).toBe(0);
       expect(
         (
           await env.DB.prepare(
-            "SELECT COUNT(DISTINCT video_id) AS count FROM video_discoveries WHERE channel_id LIKE 'UCbatch%'",
+            "SELECT COUNT(*) AS count FROM video_discoveries",
           ).first<{ count: number }>()
         )?.count,
-      ).toBe(113);
+      ).toBe(0);
+      // Following the actual owner exposes both entries without rewriting the
+      // stored owner or the feed-channel subscription.
+      await upsertExternalChannel(
+        env.DB,
+        {
+          id: "UCdifferentOwner",
+          title: "Different owner",
+          description: "",
+          thumbnailUrl: null,
+        },
+        future,
+      );
+      await upsertRemoteSubscription(
+        env.DB,
+        rssAccount.id,
+        "UCdifferentOwner",
+        null,
+      );
+      const ownerSubscribed = await listFeed(
+        env.DB,
+        rssAccount.id,
+        { status: "all", channelId: null, cursor: null, limit: 150 },
+        "external",
+      );
+      expect(ownerSubscribed.items).toHaveLength(113);
+      expect(
+        (
+          await env.DB.prepare(
+            "SELECT channel_id FROM videos WHERE id='00000000000'",
+          ).first<{ channel_id: string }>()
+        )?.channel_id,
+      ).toBe("UCdifferentOwner");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -766,6 +824,109 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const second = await handleSync(env, rssAccount, "rss");
       expect(second.status).toBe("partial");
       expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("uses account+channel KV validators for legacy RSS without touching D1 channel success fields", async () => {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO accounts(id,mode,connected,created_at,updated_at) VALUES ('legacy-kv','real',1,?,?)",
+    )
+      .bind(now, now)
+      .run();
+    const legacyAccount = (await env.DB.prepare(
+      "SELECT * FROM accounts WHERE id='legacy-kv'",
+    ).first<AccountRow>())!;
+    const channelId = "UClegacy-kv";
+    await upsertExternalChannel(
+      env.DB,
+      { id: channelId, title: "Legacy KV", description: "", thumbnailUrl: null },
+      future,
+    );
+    await upsertRemoteSubscription(env.DB, legacyAccount.id, channelId, null);
+    await env.DB.prepare(
+      "UPDATE channels SET rss_etag='sentinel',rss_last_modified='sentinel',last_synced_at='2020-01-01T00:00:00.000Z' WHERE id=?",
+    )
+      .bind(channelId)
+      .run();
+
+    const store = new Map<string, string>();
+    let failGet = false;
+    const kv = {
+      get: async (key: string) => {
+        if (failGet) throw new Error("KV unavailable");
+        return store.get(key) ?? null;
+      },
+      put: async (key: string, value: string) => {
+        store.set(key, value);
+      },
+    } as unknown as KVNamespace;
+    const rssEnv: Env = { ...env, READ_CACHE: kv };
+    const conditional: Array<string | null> = [];
+    let extra: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string, init: RequestInit) => {
+        const ifNoneMatch = new Headers(init.headers).get("if-none-match");
+        conditional.push(ifNoneMatch);
+        if (ifNoneMatch === "legacy-etag")
+          return new Response(null, { status: 304 });
+        return new Response(
+          '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Legacy KV</title>' +
+            `<entry><yt:videoId>LegacyOld01</yt:videoId><yt:channelId>${channelId}</yt:channelId><title>Old</title><published>2020-01-01T00:00:00Z</published></entry>` +
+            `<entry><yt:videoId>Legacy00001</yt:videoId><yt:channelId>${channelId}</yt:channelId><title>One</title><published>${new Date().toISOString()}</published></entry>` +
+            (extra
+              ? `<entry><yt:videoId>${extra}</yt:videoId><yt:channelId>${channelId}</yt:channelId><title>Two</title><published>${new Date().toISOString()}</published></entry>`
+              : "") +
+            "</feed>",
+          { headers: { etag: "legacy-etag" } },
+        );
+      }),
+    );
+    try {
+      const first = await handleSync(rssEnv, legacyAccount, "rss");
+      expect(first.items).toBe(1);
+      expect(conditional).toEqual([null]);
+      expect(
+        await getVideo(env.DB, legacyAccount.id, "LegacyOld01", "external"),
+      ).toBeNull();
+      expect(store.size).toBe(1);
+
+      const second = await handleSync(rssEnv, legacyAccount, "rss");
+      expect(second.items).toBe(0);
+      expect(conditional).toEqual([null, "legacy-etag"]);
+
+      await writeRssCheck(rssEnv, legacyAccount.id, channelId, {
+        checkedAt: new Date(Date.now() - 25 * 3600000).toISOString(),
+        etag: "stale",
+        lastModified: null,
+      });
+      extra = "Legacy00002";
+      const stale = await handleSync(rssEnv, legacyAccount, "rss");
+      expect(stale.items).toBe(1);
+      expect(conditional).toEqual([null, "legacy-etag", null]);
+
+      failGet = true;
+      extra = "Legacy00003";
+      const fallback = await handleSync(rssEnv, legacyAccount, "rss");
+      expect(fallback.items).toBe(1);
+      expect(conditional).toEqual([null, "legacy-etag", null, null]);
+      expect(
+        await env.DB.prepare(
+          "SELECT rss_etag,rss_last_modified,last_synced_at FROM channels WHERE id=?",
+        )
+          .bind(channelId)
+          .first<{
+            rss_etag: string;
+            rss_last_modified: string;
+            last_synced_at: string;
+          }>(),
+      ).toEqual({
+        rss_etag: "sentinel",
+        rss_last_modified: "sentinel",
+        last_synced_at: "2020-01-01T00:00:00.000Z",
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -839,7 +1000,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         calls.push(id);
         const entries = Array.from({ length: 15 }, (_, i) => {
           const n = (id.endsWith("0") ? 70000 : 70100) + i;
-          return `<entry><yt:videoId>${String(n).padStart(11, "0")}</yt:videoId><yt:channelId>UCowner${n}</yt:channelId><title>Free fixture ${n}</title><published>2026-10-20T00:00:00Z</published></entry>`;
+          return `<entry><yt:videoId>${String(n).padStart(11, "0")}</yt:videoId><yt:channelId>UCowner${n}</yt:channelId><title>Free fixture ${n}</title><published>${new Date().toISOString()}</published></entry>`;
         }).join("");
         return new Response(
           `<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"><title>Free fixture</title>${entries}</feed>`,

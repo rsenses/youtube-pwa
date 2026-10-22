@@ -34,6 +34,7 @@ import {
 } from "./db";
 import { getValidAccessToken, requireConnectedAccount } from "./auth";
 import { MAX_FEED_BYTES, channelFeedUrl, parseAtomFeed } from "./rss";
+import { readRssCheck, rssRecentCutoff, writeRssCheck } from "./rss-cache";
 import {
   listPlaylistItems,
   listPlaylists,
@@ -663,10 +664,7 @@ function summariesDetail(value: Record<string, unknown>): string {
 interface RssChannelRow {
   id: string;
   title: string;
-  etag: string | null;
-  lastModified: string | null;
   failures: number;
-  purgedAt: string | null;
 }
 
 async function loadRssChannels(
@@ -687,9 +685,7 @@ async function loadRssChannels(
   }
   params.push(env.SYNC_PROFILE === "free" ? 1 : RSS_BATCH);
   const result = await env.DB.prepare(
-    `SELECT c.id AS id, c.title AS title, c.rss_etag AS etag,
-            c.rss_last_modified AS lastModified, c.rss_failures AS failures,
-            c.purged_at AS purgedAt
+    `SELECT c.id AS id, c.title AS title, c.rss_failures AS failures
      FROM subscriptions s
      JOIN channels c ON c.id = s.channel_id
      WHERE ${conditions.join(" AND ")}
@@ -701,11 +697,7 @@ async function loadRssChannels(
   return (result.results ?? []).map((row) => ({
     id: String(row.id ?? ""),
     title: String(row.title ?? ""),
-    etag: typeof row.etag === "string" ? row.etag : null,
-    lastModified:
-      typeof row.lastModified === "string" ? row.lastModified : null,
     failures: toNumber(row.failures),
-    purgedAt: typeof row.purgedAt === "string" ? row.purgedAt : null,
   }));
 }
 
@@ -724,6 +716,7 @@ async function saveRssCursor(
 
 async function fetchAndStoreFeed(
   env: Env,
+  accountId: string,
   channel: RssChannelRow,
   now: string,
 ): Promise<{ items: number; skipped: number }> {
@@ -731,10 +724,12 @@ async function fetchAndStoreFeed(
   const headers: Record<string, string> = {
     accept: "application/atom+xml, application/xml;q=0.9, text/xml;q=0.8",
   };
-  const etag = safeHeaderValue(channel.etag);
-  const lastModified = safeHeaderValue(channel.lastModified);
-  if (etag) headers["if-none-match"] = etag;
-  if (lastModified) headers["if-modified-since"] = lastModified;
+  // Only a successful KV record authorizes conditional headers. D1 channel
+  // validators are ignored so each account has its own bootstrap state.
+  const check = await readRssCheck(env, accountId, channel.id, now);
+  if (check?.etag) headers["if-none-match"] = check.etag;
+  if (check?.lastModified)
+    headers["if-modified-since"] = check.lastModified;
 
   const response = await fetchWithTimeout(
     url,
@@ -755,18 +750,7 @@ async function fetchAndStoreFeed(
     );
   }
 
-  if (response.status === 304) {
-    await env.DB.prepare(
-      `UPDATE channels SET last_synced_at = ?, rss_failures = 0, rss_next_attempt_at = NULL,
-         rss_etag = CASE WHEN ? IS NOT NULL THEN NULL ELSE rss_etag END,
-         rss_last_modified = CASE WHEN ? IS NOT NULL THEN NULL ELSE rss_last_modified END,
-         updated_at = ?
-       WHERE id = ?`,
-    )
-      .bind(now, channel.purgedAt, channel.purgedAt, now, channel.id)
-      .run();
-    return { items: 0, skipped: 0 };
-  }
+  if (response.status === 304) return { items: 0, skipped: 0 };
 
   if (!response.ok) {
     throw new ExternalError(
@@ -792,31 +776,28 @@ async function fetchAndStoreFeed(
   }
 
   const feed = parseAtomFeed(body);
-  const expiresAt = isoInDays(METADATA_TTL_DAYS);
+  const cutoff = rssRecentCutoff(now);
+  const expiresAt = isoInDays(METADATA_TTL_DAYS, new Date(now));
   const feedTitle = sanitizeText(feed.title, 300);
-  const statements: D1PreparedStatement[] = [];
-  let stored = 0;
   let skipped = feed.skipped;
 
+  // Old entries are ignored before any existence lookup or video write.
+  const recent = feed.entries.filter((entry) => entry.publishedAt >= cutoff);
   // Bound SQL statements as well as external requests on Workers Free.
-  for (const entry of env.SYNC_PROFILE === "free"
-    ? feed.entries.slice(0, 6)
-    : feed.entries) {
+  const candidates = env.SYNC_PROFILE === "free" ? recent.slice(0, 6) : recent;
+  const existing = new Set<string>();
+  if (candidates.length) {
+    const known = await env.DB.prepare(
+      `SELECT id FROM videos WHERE id IN (${candidates.map(() => "?").join(",")})`,
+    )
+      .bind(...candidates.map((entry) => entry.videoId))
+      .all<{ id: string }>();
+    for (const row of known.results ?? []) existing.add(row.id);
+  }
+  const videos: ExternalVideo[] = [];
+  for (const entry of candidates) {
+    if (existing.has(entry.videoId)) continue;
     const ownerId = entry.channelId || channel.id;
-    if (ownerId !== channel.id)
-      statements.push(
-        externalChannelStatement(
-          env.DB,
-          {
-            id: ownerId,
-            title: entry.channelTitle || ownerId,
-            description: "",
-            thumbnailUrl: null,
-          },
-          expiresAt,
-          now,
-        ),
-      );
     const video: ExternalVideo = {
       id: entry.videoId,
       channelId: ownerId,
@@ -835,39 +816,24 @@ async function fetchAndStoreFeed(
       skipped += 1;
       continue;
     }
-    statements.push(externalVideoStatement(env.DB, video, expiresAt, now));
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO video_discoveries (video_id, channel_id, last_seen_at)
-      VALUES (?, ?, ?) ON CONFLICT(video_id, channel_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
-      ).bind(video.id, channel.id, now),
-    );
-    stored += 1;
+    videos.push(video);
   }
 
-  statements.push(
-    env.DB.prepare(
-      `UPDATE channels SET
-         title = CASE WHEN ? <> '' THEN ? ELSE title END,
-         last_synced_at = ?, expires_at = ?,
-         purged_at = CASE WHEN ? <> '' THEN NULL ELSE purged_at END,
-         rss_etag = ?, rss_last_modified = ?,
-         rss_failures = 0, rss_next_attempt_at = NULL, updated_at = ?
-       WHERE id = ?`,
-    ).bind(
-      feedTitle,
-      feedTitle,
-      now,
-      expiresAt,
-      feedTitle,
-      safeHeaderValue(response.headers.get("etag")),
-      safeHeaderValue(response.headers.get("last-modified")),
-      now,
-      channel.id,
+  await executeStatements(
+    env,
+    videos.map((video) =>
+      externalVideoStatement(env.DB, video, expiresAt, now, true),
     ),
   );
-  await executeStatements(env, statements);
-  return { items: stored, skipped };
+  // Validators become reusable only after every durable write above succeeded
+  // and the feed produced no incomplete entry that a 304 could hide.
+  if (skipped === 0)
+    await writeRssCheck(env, accountId, channel.id, {
+      checkedAt: now,
+      etag: safeHeaderValue(response.headers.get("etag")),
+      lastModified: safeHeaderValue(response.headers.get("last-modified")),
+    });
+  return { items: videos.length, skipped };
 }
 
 async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
@@ -902,7 +868,12 @@ async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
       rows.map(async (channel) => {
         processed++;
         try {
-          const result = await fetchAndStoreFeed(env, channel, now);
+          const result = await fetchAndStoreFeed(
+            env,
+            account.id,
+            channel,
+            now,
+          );
           items += result.items;
           skipped += result.skipped;
         } catch (error) {

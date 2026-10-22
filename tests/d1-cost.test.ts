@@ -46,6 +46,8 @@ beforeAll(async () => {
     "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<4495) INSERT INTO videos(id,channel_id,title,published_at,duration_seconds,is_live,live_broadcast_content,source,fetched_at,expires_at,purged_at,created_at,updated_at) SELECT printf('v%010d',x),CASE WHEN x<1695 THEN printf('UC%022d',x%113) ELSE '' END,'Fixture',CASE WHEN x<1695 THEN '2025-01-01T00:00:00.000Z' ELSE '2026-01-01T00:00:00.000Z' END,300,0,'none',CASE WHEN x<1695 THEN 'rss' ELSE 'youtube' END,'2026-01-01T00:00:00.000Z','2099-01-01T00:00:00.000Z',CASE WHEN x>=1695 THEN '2026' ELSE NULL END,'2026','2026' FROM n",
     "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1773) INSERT INTO watch_states(account_id,video_id,watched,manual,updated_at) SELECT 'cost-owner',printf('v%010d',x),0,0,'2026' FROM n",
     "INSERT INTO video_discoveries(video_id,channel_id,last_seen_at) SELECT id,channel_id,'2026-10-21' FROM videos WHERE source='rss'",
+    "INSERT INTO videos(id,channel_id,title,published_at,duration_seconds,is_live,live_broadcast_content,source,fetched_at,expires_at,purged_at,created_at,updated_at) VALUES ('unowned0001','UCunsubscribed','Unowned','2099-02-01T00:00:00.000Z',300,0,'none','rss','2026-01-01T00:00:00.000Z','2099-01-01T00:00:00.000Z',NULL,'2026','2026')",
+    "INSERT INTO video_discoveries(video_id,channel_id,last_seen_at) VALUES ('unowned0001',printf('UC%022d',0),'2026-10-21')",
     "INSERT INTO account_video_metadata(account_id,video_id,metadata,fetched_at,expires_at,details_fetched_at) SELECT 'cost-owner',id,json_object('title','Private fixture','durationSeconds',300,'publishedAt',published_at,'liveBroadcastContent','none'),'2026','2099-01-01T00:00:00.000Z','2026' FROM videos WHERE source='youtube'",
     "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<42) INSERT INTO playlists(id,account_id,source,remote_id,title,created_at,updated_at) SELECT printf('p%d',x),'cost-owner','youtube',printf('remote%d',x),'List','2026','2026' FROM n",
     "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<2672) INSERT INTO playlist_items(id,playlist_id,video_id,added_at) SELECT printf('pi%d',x),printf('p%d',x%43),printf('v%010d',1695+x),'2026' FROM n",
@@ -107,6 +109,7 @@ it("feed scans are bounded on a realistic library, including many unrelated priv
     );
     console.log("D1 cost feed", status, m.rows);
     expect(result.items).toHaveLength(18);
+    expect(result.items.map((v) => v.id)).not.toContain("unowned0001");
     expect(m.rows).toBeLessThan(5000);
   }
 }, 30000);
