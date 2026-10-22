@@ -5,7 +5,14 @@
  */
 import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
-import { cachedFeed, cachedPlaylists, invalidateReads } from "./read-cache";
+import {
+  cachedFeed,
+  cachedPlaylists,
+  invalidateReads,
+  feedRevision,
+} from "./read-cache";
+import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
+import { isRecentEnough } from "./rss";
 import {
   ExternalError,
   HttpError,
@@ -326,7 +333,12 @@ async function ensureVideoKnown(
   const account = requireAccount(ctx);
   const scope = videoScope(ctx);
   const existing = await getVideo(ctx.env.DB, account.id, videoId, scope);
-  if (existing && !refresh) return existing;
+  if (
+    existing &&
+    (!refresh ||
+      (isWebSubEnabled(ctx.env) && !isRecentEnough(existing.publishedAt)))
+  )
+    return existing;
   if (ctx.env.MODE !== "real") return null;
 
   requireConnectedAccount(account);
@@ -342,7 +354,12 @@ async function ensureVideoKnown(
   const snippet = item.snippet;
   const title = sanitizeText(snippet?.title, 500);
   const publishedAt = isoOrNull(snippet?.publishedAt);
-  if (!title || !publishedAt) return null;
+  if (
+    !title ||
+    !publishedAt ||
+    (isWebSubEnabled(ctx.env) && !isRecentEnough(publishedAt))
+  )
+    return null;
   const viewCountRaw = item.statistics?.viewCount;
   const video: ExternalVideo = {
     id: item.id,
@@ -1457,6 +1474,14 @@ async function handleDeleteDataRequest(ctx: RouteContext): Promise<Response> {
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/api\/session$/, handler: handleSession },
   { method: "GET", pattern: /^\/api\/feed$/, handler: handleFeed },
+  {
+    method: "GET",
+    pattern: /^\/api\/feed\/revision$/,
+    handler: async (ctx) => {
+      const account = requireAccount(ctx);
+      return json({ revision: await feedRevision(ctx.env, account.id) });
+    },
+  },
   { method: "GET", pattern: /^\/api\/videos\/([^/]+)$/, handler: handleVideo },
   {
     method: "PUT",
@@ -1641,9 +1666,12 @@ async function dispatchApi(
   const metadataRead =
     method === "GET" &&
     !url.pathname.endsWith("/sync") &&
-    !["/api/session", "/api/settings", "/api/sync/status"].includes(
-      url.pathname,
-    );
+    ![
+      "/api/session",
+      "/api/settings",
+      "/api/sync/status",
+      "/api/feed/revision",
+    ].includes(url.pathname);
   if (metadataRead && (env.MODE === "real" || env.YOUTUBE_API_KEY)) {
     // Retention cannot depend on a cron invocation: purge before serving or
     // mutating data so expired metadata is never acted on.
@@ -1680,6 +1708,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const path = url.pathname;
+
+  // Public hub boundary: signature/token verification replaces browser CSRF.
+  if (path === WEBSUB_CALLBACK_PATH) return handleWebSub(request, env);
 
   if (path === "/auth/google/start") {
     if (method !== "GET") {
@@ -1758,6 +1789,13 @@ export default {
     // Wrangler local testing accepts a job name in ?cron=rss|playlists.
     // Normal Cron Trigger expressions continue to run the complete pipeline.
     const type = isSyncType(_controller.cron) ? _controller.cron : "all";
-    ctx.waitUntil(runScheduledSync(env, type).catch(() => undefined));
+    ctx.waitUntil(
+      runScheduledSync(env, type).catch(() => {
+        // Never log callback payloads, signatures, tokens or external URLs.
+        console.error(
+          "Scheduled synchronization failed; durable claims will retry.",
+        );
+      }),
+    );
   },
 } satisfies ExportedHandler<Env, SyncMessage>;

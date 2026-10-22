@@ -1,5 +1,7 @@
 /** One Queue message advances one durable, bounded step. No credentials in messages/state. */
 import type { AccountRow, Env } from "./types";
+import { isWebSubEnabled } from "./websub";
+import { isRecentEnough, oldestVideoDate } from "./rss";
 import {
   ExternalError,
   HttpError,
@@ -322,7 +324,9 @@ export async function queuedSyncStatus(
 async function subscriptionStep(env: Env, account: AccountRow, s: State) {
   const result = await syncSubscriptionStep(env, account);
   s.items += result.items;
-  if (!result.more) s.phase = s.requested === "subscriptions" ? "done" : "rss";
+  if (!result.more)
+    s.phase =
+      s.requested === "subscriptions" || isWebSubEnabled(env) ? "done" : "rss";
 }
 async function rssStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
@@ -345,8 +349,7 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
     // proof. Missing, stale, invalid or failed KV reads force a full fetch.
     const check = await readRssCheck(env, account.id, row.id, now);
     if (check?.etag) headers["if-none-match"] = check.etag;
-    if (check?.lastModified)
-      headers["if-modified-since"] = check.lastModified;
+    if (check?.lastModified) headers["if-modified-since"] = check.lastModified;
     const response = await fetchWithTimeout(channelFeedUrl(row.id), {
       headers,
     });
@@ -581,6 +584,28 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   );
   if (!Array.isArray(data.items)) throw new ExternalError("invalid_response");
   const statements: D1PreparedStatement[] = [];
+  const retained = new Set<string>();
+  if (isWebSubEnabled(env)) {
+    const oldIds = data.items
+      .filter((entry) => {
+        const date =
+          entry.contentDetails?.videoPublishedAt || entry.snippet?.publishedAt;
+        return date && !isRecentEnough(date, now);
+      })
+      .map(
+        (entry) =>
+          entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId,
+      )
+      .filter((id): id is string => !!id);
+    if (oldIds.length) {
+      const existing = await env.DB.prepare(
+        `SELECT id FROM videos WHERE id IN (${oldIds.map(() => "?").join(",")})`,
+      )
+        .bind(...oldIds)
+        .all<{ id: string }>();
+      for (const row of existing.results || []) retained.add(row.id);
+    }
+  }
   for (const entry of data.items) {
     const id =
       entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId;
@@ -596,6 +621,11 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       !Number.isFinite(Date.parse(date))
     )
       throw new ExternalError("incomplete_playlist_item");
+    const tooOld = isWebSubEnabled(env) && !isRecentEnough(date, now);
+    if (tooOld && !retained.has(id)) {
+      p.position++;
+      continue;
+    }
     const v: ExternalVideo = {
       id,
       channelId: snippet.videoOwnerChannelId || "",
@@ -609,9 +639,10 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       viewCount: null,
       source: "youtube",
     };
-    statements.push(
-      ...privateVideoStatements(env.DB, account.id, v, now, isoInDays(25)),
-    );
+    if (!tooOld)
+      statements.push(
+        ...privateVideoStatements(env.DB, account.id, v, now, isoInDays(25)),
+      );
     statements.push(
       env.DB.prepare(
         `INSERT INTO playlist_items(id,playlist_id,video_id,remote_item_id,position,sync_generation,added_at)
@@ -658,7 +689,8 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
   const rows = owned
     ? await env.DB.prepare(
         `SELECT pm.video_id AS id FROM account_video_metadata pm WHERE pm.account_id=? AND pm.video_id>?
- AND (?='' OR EXISTS(SELECT 1 FROM playlist_items scoped WHERE scoped.playlist_id=? AND scoped.video_id=pm.video_id))
+ AND (?=0 OR json_extract(pm.metadata,'$.publishedAt')>=?)
+ AND (?=''  OR EXISTS(SELECT 1 FROM playlist_items scoped WHERE scoped.playlist_id=? AND scoped.video_id=pm.video_id))
  AND (pm.expires_at<=? OR pm.details_fetched_at<=? OR json_extract(pm.metadata,'$._detailsExpired')=1
  OR (json_extract(pm.metadata,'$.publishedAt')>=? AND pm.details_fetched_at<=?)
  OR (pm.details_fetched_at IS NULL AND (?<>'' OR json_extract(pm.metadata,'$.publishedAt')>=? OR EXISTS(
@@ -670,6 +702,8 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
         .bind(
           account.id,
           cursor,
+          isWebSubEnabled(env) ? 1 : 0,
+          oldestVideoDate(s.startedAt),
           s.playlistId || "",
           s.playlistId || "",
           maintenance,
@@ -690,7 +724,15 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
  AND EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1)
  ORDER BY v.id LIMIT 8`,
       )
-        .bind(cursor, cutoff, maintenance, maintenance, recent, live, account.id)
+        .bind(
+          cursor,
+          cutoff,
+          maintenance,
+          maintenance,
+          recent,
+          live,
+          account.id,
+        )
         .all<{ id: string }>();
   const ids = (rows.results || []).map((r) => r.id);
   if (!ids.length) {
@@ -756,6 +798,16 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
 }
 async function step(env: Env, account: AccountRow, s: State) {
   s.since = s.lastSuccessAt || null;
+  // Cut over persisted jobs too: enabled discovery is global, never per account.
+  if (
+    isWebSubEnabled(env) &&
+    s.requested !== "playlists" &&
+    s.phase !== "subscriptions"
+  ) {
+    s.phase = "done";
+    delete s.rss;
+    return;
+  }
   if (
     s.requested !== "playlists" &&
     (s.phase === "playlists" || s.phase === "playlist_items")
@@ -1015,15 +1067,24 @@ export async function recoverAndScheduleSync(env: Env): Promise<void> {
     .bind(now, now, new Date(Date.now() - STALE_MS).toISOString())
     .all<Job>();
   for (const job of stale.results || []) await dispatch(env, job, true);
+  const subscriptionHistory = isWebSubEnabled(env)
+    ? "AND j.type IN ('subscriptions','all')"
+    : "";
   const account = await env.DB.prepare(
     `SELECT * FROM accounts a WHERE mode='real' AND connected=1
   AND NOT EXISTS(SELECT 1 FROM sync_jobs j WHERE j.account_id=a.id AND j.status IN ${ACTIVE})
-  AND COALESCE((SELECT MAX(created_at) FROM sync_jobs j WHERE j.account_id=a.id),'')<=?
-  ORDER BY COALESCE((SELECT MAX(created_at) FROM sync_jobs j WHERE j.account_id=a.id),'') LIMIT 1`,
+  AND COALESCE((SELECT MAX(created_at) FROM sync_jobs j WHERE j.account_id=a.id ${subscriptionHistory}),'')<=?
+  ORDER BY COALESCE((SELECT MAX(created_at) FROM sync_jobs j WHERE j.account_id=a.id ${subscriptionHistory}),'') LIMIT 1`,
   )
     .bind(new Date(Date.now() - AUTO_INTERVAL_MS).toISOString())
     .first<AccountRow>();
-  if (account) await startQueuedSync(env, account, "all", false);
+  if (account)
+    await startQueuedSync(
+      env,
+      account,
+      isWebSubEnabled(env) ? "subscriptions" : "all",
+      false,
+    );
   await env.DB.batch([
     env.DB.prepare("DELETE FROM sync_queue_budget WHERE day<?").bind(
       isoInDays(-7).slice(0, 10),

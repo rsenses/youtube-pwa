@@ -16,7 +16,8 @@
     "MODE":"real",
     "APP_ORIGIN":"https://alveo.rsenses.com",
     "SYNC_PROFILE":"free",
-    "SYNC_QUEUE_DAILY_CAP":"2600"
+    "SYNC_QUEUE_DAILY_CAP":"2600",
+    "WEBSUB_ENABLED":"true"
   },
   "d1_databases":[{
     "binding":"DB",

@@ -19,6 +19,9 @@ export interface Env extends Omit<
   SYNC_QUEUE?: Queue<{ jobId: string; version: number }>;
   SYNC_QUEUE_DAILY_CAP?: string;
   SYNC_MAINTENANCE?: string;
+  /** Opt-in until migration/callback/Access are configured by the operator. */
+  WEBSUB_ENABLED?: string;
+  WEBSUB_SECRET?: string;
   APP_ORIGIN: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -86,6 +89,7 @@ export interface SessionInfo {
     comments: boolean;
     publicData?: boolean;
     localPlaylists: boolean;
+    automaticDiscovery?: boolean;
   };
 }
 

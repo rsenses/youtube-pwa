@@ -663,6 +663,41 @@ function Feed() {
   const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
   const { notify, session } = useApp();
   const loadGeneration = useRef(0);
+  useEffect(() => {
+    if (!session.capabilities.automaticDiscovery) return;
+    let revision: string | null = null;
+    let checking = false;
+    const controller = new AbortController();
+    const check = async () => {
+      if (document.visibilityState !== "visible" || checking) return;
+      checking = true;
+      try {
+        const next = await api<{ revision: string }>(
+          "/api/feed/revision",
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (!controller.signal.aborted && revision !== next.revision) {
+          revision = next.revision;
+          // Reset pagination rather than mixing pages from different revisions.
+          setVersion((v) => v + 1);
+        }
+      } catch {
+        // Normal feed requests keep reporting errors; background polling retries.
+      } finally {
+        checking = false;
+      }
+    };
+    void check();
+    const timer = setInterval(check, 60000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [session.capabilities.automaticDiscovery]);
   const query = new URLSearchParams({
     status,
     channelId: channel,
@@ -760,10 +795,7 @@ function Feed() {
   }
   return (
     <>
-      <PageHeading
-        title="Feed"
-        action={<SyncButton onDone={() => setVersion((v) => v + 1)} />}
-      />
+      <PageHeading title="Feed" />
       {session.mode === "demo" && (
         <div className="demo-banner">
           <Icon name="info" size={16} />
@@ -1430,13 +1462,30 @@ function PlaylistPage() {
 }
 function SubscribeChannel({ channelId }: { channelId: string }) {
   const { session, notify } = useApp();
-  const { data, loading, error } = useResource<{ items: Channel[] }>("/api/channels");
+  const { data, loading, error } = useResource<{ items: Channel[] }>(
+    "/api/channels",
+  );
   const [busy, setBusy] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
-  const following = subscribed || !!data?.items.some((c) => c.id === channelId && c.subscribed);
-  if (error) return <small role="alert" className="error-text">{error}</small>;
-  if (!loading && !following && session.mode === "real" && !session.capabilities.youtubeWrites)
-    return <Link className="button small secondary" to="/settings">Permitir suscripciones</Link>;
+  const following =
+    subscribed || !!data?.items.some((c) => c.id === channelId && c.subscribed);
+  if (error)
+    return (
+      <small role="alert" className="error-text">
+        {error}
+      </small>
+    );
+  if (
+    !loading &&
+    !following &&
+    session.mode === "real" &&
+    !session.capabilities.youtubeWrites
+  )
+    return (
+      <Link className="button small secondary" to="/settings">
+        Permitir suscripciones
+      </Link>
+    );
   return (
     <button
       className={`button small ${following ? "secondary" : ""}`}
@@ -1446,7 +1495,11 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
         try {
           await api("/api/subscriptions", "POST", { channelId });
           setSubscribed(true);
-          notify(session.mode === "demo" ? "Canal seguido en la demo" : "Suscripción añadida en YouTube");
+          notify(
+            session.mode === "demo"
+              ? "Canal seguido en la demo"
+              : "Suscripción añadida en YouTube",
+          );
         } catch (e) {
           notify((e as Error).message);
         } finally {
@@ -1455,7 +1508,13 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
       }}
     >
       <Icon name={following ? "check" : "plus"} size={16} />
-      {loading ? "Cargando…" : following ? "Suscrito" : busy ? "Suscribiendo…" : "Suscribirse"}
+      {loading
+        ? "Cargando…"
+        : following
+          ? "Suscrito"
+          : busy
+            ? "Suscribiendo…"
+            : "Suscribirse"}
     </button>
   );
 }
@@ -1533,7 +1592,10 @@ function Watch({ id }: { id: string }) {
                 </small>
               </div>
             </Link>
-            <SubscribeChannel key={video.channelId} channelId={video.channelId} />
+            <SubscribeChannel
+              key={video.channelId}
+              channelId={video.channelId}
+            />
             <div className="watch-actions">
               <button
                 className={`button small ${video.watched ? "" : "secondary"}`}
@@ -1606,9 +1668,7 @@ function Watch({ id }: { id: string }) {
                 <Icon name="chevron" size={16} />
               </button>
             </div>
-            {comments ? (
-              <Comments videoId={id} />
-            ) : null}
+            {comments ? <Comments videoId={id} /> : null}
           </section>
         </div>
       </div>
@@ -1874,10 +1934,7 @@ function useSyncStatus(endpoint = "/api/sync/status") {
 function SettingsPage() {
   const { session, settings, updateSettings, notify, refreshSession } =
     useApp();
-  const {
-    data: syncStatus,
-    error: syncError,
-  } = useSyncStatus();
+  const { data: syncStatus, error: syncError } = useSyncStatus();
   const currentJob =
     syncStatus?.jobs?.find(isActiveSyncJob) || syncStatus?.jobs?.[0];
   const [consent, setConsent] = useState(false);
@@ -1976,9 +2033,7 @@ function SettingsPage() {
         </section>
         <section className="settings-card">
           <h2>Marcar como visto</h2>
-          <p>
-            Marca el vídeo automáticamente al alcanzar este porcentaje.
-          </p>
+          <p>Marca el vídeo automáticamente al alcanzar este porcentaje.</p>
           <form
             onSubmit={async (e) => {
               e.preventDefault();

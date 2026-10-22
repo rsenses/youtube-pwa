@@ -1,6 +1,30 @@
 # Lecturas D1 y caché
 
-## Diagnóstico y medición local
+## WebSub global: medición local nueva
+
+El modo opt-in y sus reglas actuales se describen en [WEBSUB.md](WEBSUB.md). Esta sección sustituye el contrato de RSS de 24 h/insert-only/KV por cuenta **sólo cuando WebSub está activo**. Las mediciones previas más abajo son históricas y de escenarios distintos; no se pueden restar directamente como ahorro total de producción.
+
+Miniflare/D1, sin red externa ni base real, con los índices de las migraciones 0010/0011:
+
+| Escenario medido | Filas leídas | Filas escritas |
+| --- | ---: | ---: |
+| Notificación duplicada exacta | 2 | 0 |
+| Actualización de vídeo visto por todos, fuera de listas | 8 | 0 |
+| RSS: 113 canales únicos, 300 vídeos cambiados, dos cuentas compartidas | 4.165 | 1.839 |
+| Misma pasada RSS completa sin cambios (113 canales) | 1.165 | 339 |
+| Limpieza semanal: 50 vídeos, 100 estados de visionado eliminados | 1.105 | 153 |
+
+La pasada RSS incluye selección por índice, claims/seguimiento global, contenido y revisión global; no incluye sincronizar suscripciones OAuth, hub registration/renewal, purgas HTTP previas ni sondeo del navegador. Las 339 escrituras sin cambios son los 113 registros globales de seguimiento y sus índices (3 por canal); cero escrituras de vídeo o epoch. A diferencia del modo anterior con seguimiento KV, se paga este pequeño checkpoint durable una vez al día por **canal único**, nunca por usuario/petición de actualizar. El max observado por tick del primer sweep es 41 lecturas; una pasada sin cambios usa como máximo 11. Los índices `(rss_next_at,channel_id)`/`(hub_next_attempt_at,channel_id)` y la comparación de rango sin OR-NULL evitan recorrer todos los canales cuando no vence ninguno. El mismo fixture antes de corregir ese índice/recorrido gastaba 16.859 lecturas por pasada (264 max/tick), frente a 4.165 con las comprobaciones CAS adicionales actuales.
+
+La eliminación semanal se paginó antes de las comprobaciones de listas/usuarios. Añadir índices por vídeo en `watch_states` y `account_video_metadata` redujo el fixture de 13.605 a 1.105 lecturas. Las 153 escrituras incluyen FK/cascada y estado global, no 153 vídeos. El borrado cuenta 50 vídeos reales mediante RETURNING.
+
+Un evento más nuevo con contenido idéntico puede escribir sólo la marca de orden, sin metadata ni epoch: es necesario para que A@1, A@3, B@2 no termine en B. Redelivery exacto con el mismo timestamp sigue siendo cero escrituras. RSS puede enriquecer el mismo timestamp recibido antes por push escaso, sin devolver campos ausentes a NULL.
+
+No se añade ninguna Queue para descubrimiento, ni trabajos por usuario/estado visto por vídeo. Los tests de escala prueban un registro por cada canal compartido, no CPU del Worker Free. El cron mantiene una operación de hub y una de RSS por minuto: la activación inicial de muchos canales es escalonada; una vez inscrito, el evento no espera esa pasada diaria. No se ha medido interoperabilidad hub real ni latencia/CPU de producción. El sondeo de revisión de feed lee estado, no la consulta completa de vídeos; debe contarse por pestaña visible en la medición total futura.
+
+Comandos dirigidos: `npx vitest run tests/websub.test.ts tests/channel-sync.test.ts tests/websub-integration.test.ts tests/video-retention.test.ts --silent=false`. El coste previo de RSS reciente (282/85 para 17 nuevos, excluyendo jobs y metadata) **no es una comparación equivalente** a 300 actualizaciones más tracking global. No se afirma un porcentaje de ahorro global sin medición controlada posterior.
+
+## Diagnóstico y medición local (modo anterior)
 
 Las analíticas remotas de últimas 24 h mostraron consultas del feed con medias de 208.452–287.142 filas leídas por ejecución. No se han ejecutado más consultas SQL remotas durante el bloqueo de cuota. La copia offline no tenía metadata expirada: no hay evidencia de que la purga fuera la causa principal de este incidente.
 
@@ -40,6 +64,41 @@ Las 113 comprobaciones de canal siguen leyendo 226 filas (dos por join) y las 14
 Estas cifras excluyen explícitamente suscripciones/OAuth, listas y elementos, API de metadata y renovación, coordinación de cola/leases/mensajes, reintentos HTTP, propagación y cuota reales de KV, y la preparación de la copia. La métrica es D1 local (`rows_read`/`rows_written` por sentencia), no el coste total de producción. El transcript usa la página visible del feed (máximo 15 entradas); el archivo histórico más profundo no es observable.
 
 Las cifras son locales y no una certificación del consumo total de producción. El caso de KV usa un namespace simulado con D1 real; no mide propagación ni tasa de aciertos de KV en Cloudflare. Autenticación, mantenimiento, otras rutas y otros usuarios añaden lecturas. `video_discoveries` no se elimina ni se borran sus datos históricos: solo permanece su purga de retención existente (>30 días). Ejecutar `npm run profile:d1` para repetir el perfil; sus umbrales cubren feed y hits, no el presupuesto completo de la cuenta.
+
+## Medición de propuestas de listas (sin implementar)
+
+Medición local con el fixture sintético de `tests/d1-cost.test.ts` y Miniflare/D1, sin cambios en `worker/`, esquema ni migraciones. Baseline del árbol local `cb13589`; no se consultó D1 remota ni la versión desplegada `caf795fe-e772-4242-a4ac-5ca143ded7fd`. Las cifras son `meta.rows_read`/`meta.rows_written` de D1 local, no consumo de producción. Ejecutar `npx vitest run tests/d1-cost.test.ts --silent=false` o `npm run profile:d1`; el test imprime cada cifra.
+
+Fixture: 4.497 vídeos, 113 suscripciones, 43 listas YouTube y 2.673 elementos. Fuera de toda medición se añadieron 2 listas locales (3 y 2 elementos) y se sembraron `remote_item_count` con los recuentos visibles actuales; son valores sintéticos, no de la API. Antes de sembrarlos, las 43 listas YouTube devolvieron `NULL` en la consulta candidata: 43/43 desconocidos, sin fabricar un 0.
+
+| Caso                                                        | Filas leídas | Filas escritas |
+| ----------------------------------------------------------- | -----------: | -------------: |
+| Catálogo actual, 43 listas YouTube                          |        8.147 |              0 |
+| Catálogo actual, 43 remotas + 2 locales                     |        8.165 |              0 |
+| Catálogo candidato, 45 listas, `remote_item_count` sin sembrar |           97 |              0 |
+| Catálogo candidato, 45 listas, recuentos sembrados          |           97 |              0 |
+| `getPlaylistRow` actual, p0 (63 elementos)                  |          191 |              0 |
+| Lookup candidato de mutación, sin `COUNT`                   |            1 |              0 |
+
+Semántica remota/local: las listas YouTube usan `remote_item_count` (nullable) y las locales `COUNT(playlist_items)` crudo. En el fixture, `local-a` contiene 3 vídeos `source='fixture'`; el catálogo actual en scope externo cuenta 0 porque filtra visibilidad, mientras el candidato crudo cuenta 3. `local-b`, con vídeos externos, coincide en 2. Por tanto el `COUNT` local crudo cambia la semántica de scope/purga; si debe conservarse la visibilidad actual, el recuento local tendría que mantener el filtro, con coste acotado a los elementos de listas locales. No se implementó. El DTO actual `PlaylistSummary.itemCount` es numérico y `toNumber(NULL)` daría 0; la consulta medida conserva `NULL`, pero exponerlo como nullable requiere un cambio de contrato no realizado.
+
+Detalle de p0, 63 elementos, con posiciones sintéticas 0..62 sembradas fuera de medición:
+
+| Caso                                              | Filas leídas | Filas escritas |
+| ------------------------------------------------- | -----------: | -------------: |
+| `getPlaylistDetail` actual, lista completa        |          383 |              0 |
+| Resumen candidato (`remote_item_count`, sin COUNT) |            1 |              0 |
+| Página candidata 1 (18 + 1 de lookahead)          |           59 |              0 |
+| Página candidata 2 (18 + 1 de lookahead)          |           76 |              0 |
+| Lookup + página 1 / página 2                      |        60 / 77 |            0 / 0 |
+| Otra cuenta: lookup + página                      |            2 |              0 |
+| Scope `fixture` sobre p0 (sin elementos)          |          128 |              0 |
+
+El test compara pertenencia y orden: los 18 primeros de la página 1 coinciden con `full[0..18]` y los 18 primeros de la página 2 con `full[18..36]`; el elemento 19 es solo lookahead. Ninguna consulta candidata contiene `COUNT`. El resumen candidato de p0 devuelve `itemCount=63` desde `remote_item_count`; el lookup de mutación (tabla anterior) sigue en 1 lectura. La SQL candidata incluye `JOIN playlists p ON p.id=pi.playlist_id AND p.account_id=?`; otra cuenta obtiene resumen nulo y cero elementos. El scope se conserva con `v.source`; en scope `fixture` el filtro no tiene índice y recorre los 63 elementos (128 lecturas), mientras el scope externo normal corta en 59/76.
+
+Sincronización de una lista de 30 relaciones sin cambios: el UPSERT actual de `queue-sync.ts` con `sync_generation` nuevo ejecuta 30 sentencias, 30 lecturas y **90 filas escritas** (D1 cuenta tabla e índices). El `DELETE` final de ausentes escribe 0 (30 lecturas acumuladas) y el `UPDATE playlists` que recalcula el count añade 1 escritura (91 lecturas/91 escrituras acumuladas). La propuesta de cambio-only lee las 30 relaciones (30 lecturas), calcula un diff 0/0/0 y escribe **0 filas de relación**. Con el fixture cambiado (1 reordenación, 1 alta y 1 baja), el diff de prueba detecta 1/1/1 y aplicar solo esos cambios cuesta 8 filas escritas y 2 lecturas, además de las 30 de leer el snapshot; incluye mantenimiento de índices y no es una implementación de reconciliación.
+
+No se implementó la sincronización propuesta: no se midió el estado durable de IDs vistas (JSON de job), la retirada final preservando cambios posteriores al inicio, ni escrituras de metadata privada, cola, leases o jobs; se excluyen explícitamente. Tampoco se ejecutaron suite completa, build ni deploy. Estas cifras no certifican producción ni que las propuestas sean correctas, solo el coste D1 local de las consultas y del fixture descritos.
 
 ## Caché y consistencia
 

@@ -1,5 +1,7 @@
 // Public YouTube reads and cached related searches; no OAuth writes or scraping.
 import type { Env, Video } from "./types";
+import { isWebSubEnabled } from "./websub";
+import { isRecentEnough } from "./rss";
 import { relatedQueries } from "./related-query";
 import {
   ExternalError,
@@ -98,6 +100,7 @@ export async function storeVideos(
       !Number.isFinite(Date.parse(s.publishedAt))
     )
       continue;
+    if (isWebSubEnabled(env) && !isRecentEnough(s.publishedAt)) continue;
     const expiresAt = isoInDays(25);
     statements.push(
       externalChannelStatement(

@@ -2,6 +2,7 @@
  * Sessions, CSRF material, Google OAuth flow, encrypted token storage and
  * account deletion. Secrets never reach JSON responses or logs.
  */
+import { isWebSubEnabled } from "./websub";
 import type { AccountRow, Env, SessionInfo, SessionRow } from "./types";
 import {
   ExternalError,
@@ -138,6 +139,7 @@ export function buildSessionInfo(
       comments: connected || Boolean(env.YOUTUBE_API_KEY),
       publicData: Boolean(env.YOUTUBE_API_KEY),
       localPlaylists: true,
+      automaticDiscovery: isWebSubEnabled(env),
     },
   };
   if (account) {

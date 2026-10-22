@@ -23,6 +23,32 @@ export interface AtomEntry {
   thumbnailUrl: string;
   durationSeconds: number | null;
   viewCount: number | null;
+  /** Atom <updated>; absent in feeds that only publish one timestamp. */
+  updatedAt?: string;
+  /** Presence flags distinguish sparse WebSub entries from explicit empty values. */
+  hasDescription?: boolean;
+  hasThumbnail?: boolean;
+  hasDuration?: boolean;
+  hasViewCount?: boolean;
+}
+
+/** One calendar year before now, used by both global discovery paths. */
+export function oldestVideoDate(now: string | Date = new Date()): string {
+  const reference =
+    now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  if (Number.isNaN(reference.getTime())) throw new TypeError("Invalid now");
+  reference.setUTCFullYear(reference.getUTCFullYear() - 1);
+  return reference.toISOString();
+}
+
+/** Never sync or update a video published more than a calendar year ago. */
+export function isRecentEnough(
+  publishedAt: string,
+  now: string | Date = new Date(),
+): boolean {
+  const published = Date.parse(publishedAt);
+  const oldest = Date.parse(oldestVideoDate(now));
+  return Number.isFinite(published) && published >= oldest;
 }
 
 export interface ParsedAtomFeed {
@@ -168,8 +194,18 @@ export function parseAtomFeed(xml: string): ParsedAtomFeed {
       skipped += 1;
       continue;
     }
+    let updatedAt: string | undefined;
+    const updatedRaw = text(entry.updated, 40);
+    if (updatedRaw) {
+      try {
+        updatedAt = parseIsoDate(updatedRaw, "updated");
+      } catch {
+        updatedAt = undefined;
+      }
+    }
 
     const group = asRecord(first(entry["media:group"]));
+    const hasDescription = group?.["media:description"] !== undefined;
     const description = group ? text(group["media:description"], 5000) : "";
     const thumbnail = group
       ? safeThumbnailUrl(asRecord(first(group["media:thumbnail"]))?.["@_url"])
@@ -183,6 +219,7 @@ export function parseAtomFeed(xml: string): ParsedAtomFeed {
     const durationSeconds = /^\d{1,7}$/.test(durationRaw)
       ? Number(durationRaw)
       : null;
+    const viewCount = statistics ? positiveInt(statistics["@_views"]) : null;
 
     entries.push({
       videoId,
@@ -193,7 +230,12 @@ export function parseAtomFeed(xml: string): ParsedAtomFeed {
       publishedAt,
       thumbnailUrl: thumbnail,
       durationSeconds,
-      viewCount: statistics ? positiveInt(statistics["@_views"]) : null,
+      viewCount,
+      ...(updatedAt ? { updatedAt } : {}),
+      hasDescription,
+      hasThumbnail: thumbnail !== "",
+      hasDuration: durationSeconds !== null,
+      hasViewCount: viewCount !== null,
     });
   }
 

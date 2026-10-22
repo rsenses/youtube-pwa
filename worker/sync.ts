@@ -5,6 +5,10 @@
  * subscriptions or deletes playlist items. RSS is fetched only from the
  * YouTube channel feed derived from a stored channel id (no arbitrary URLs).
  */
+import { isWebSubEnabled } from "./websub";
+import { isRecentEnough, oldestVideoDate } from "./rss";
+import { runChannelSync } from "./channel-sync";
+import { runWeeklyVideoRetention } from "./video-retention";
 import type { AccountRow, Env, SyncRun } from "./types";
 import { privateVideoStatements } from "./private-metadata";
 import {
@@ -360,6 +364,19 @@ export async function handleSync(
   type: SyncType,
 ): Promise<SyncSummary> {
   if (env.MODE === "demo") return recordNoop(env, account, type);
+  if (isWebSubEnabled(env)) {
+    requireConnectedAccount(account);
+    if (type === "rss")
+      return {
+        type,
+        mode: "real",
+        status: "noop",
+        items: 0,
+        message:
+          "Las novedades llegan automáticamente; RSS se reconcilia una vez al día por canal.",
+      };
+    if (type === "all") type = "subscriptions";
+  }
   if (env.SYNC_QUEUE) return startQueuedSync(env, account, type);
   const requestedAll = type === "all";
   if (env.SYNC_PROFILE === "free") {
@@ -728,8 +745,7 @@ async function fetchAndStoreFeed(
   // validators are ignored so each account has its own bootstrap state.
   const check = await readRssCheck(env, accountId, channel.id, now);
   if (check?.etag) headers["if-none-match"] = check.etag;
-  if (check?.lastModified)
-    headers["if-modified-since"] = check.lastModified;
+  if (check?.lastModified) headers["if-modified-since"] = check.lastModified;
 
   const response = await fetchWithTimeout(
     url,
@@ -868,12 +884,7 @@ async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
       rows.map(async (channel) => {
         processed++;
         try {
-          const result = await fetchAndStoreFeed(
-            env,
-            account.id,
-            channel,
-            now,
-          );
+          const result = await fetchAndStoreFeed(env, account.id, channel, now);
           items += result.items;
           skipped += result.skipped;
         } catch (error) {
@@ -1031,6 +1042,29 @@ async function importPlaylistItems(
     if (!Array.isArray(data.items)) throw new ExternalError("invalid_response");
     const entries: YouTubePlaylistItemEntry[] = data.items;
     const statements: D1PreparedStatement[] = [];
+    const retained = new Set<string>();
+    if (isWebSubEnabled(env)) {
+      const oldIds = entries
+        .filter((entry) => {
+          const date =
+            entry.contentDetails?.videoPublishedAt ||
+            entry.snippet?.publishedAt;
+          return date && !isRecentEnough(date, now);
+        })
+        .map(
+          (entry) =>
+            entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId,
+        )
+        .filter((id): id is string => !!id);
+      if (oldIds.length) {
+        const existing = await env.DB.prepare(
+          `SELECT id FROM videos WHERE id IN (${oldIds.map(() => "?").join(",")})`,
+        )
+          .bind(...oldIds)
+          .all<{ id: string }>();
+        for (const row of existing.results || []) retained.add(row.id);
+      }
+    }
     for (const entry of entries) {
       const videoId =
         entry.contentDetails?.videoId ||
@@ -1058,6 +1092,11 @@ async function importPlaylistItems(
         fallbackPosition += 1;
         continue;
       }
+      const tooOld = isWebSubEnabled(env) && !isRecentEnough(publishedAt, now);
+      if (tooOld && !retained.has(videoId)) {
+        fallbackPosition++;
+        continue;
+      }
       const video: ExternalVideo = {
         id: videoId,
         channelId: snippet?.videoOwnerChannelId || snippet?.channelId || "",
@@ -1074,9 +1113,10 @@ async function importPlaylistItems(
         viewCount: null,
         source: "youtube",
       };
-      statements.push(
-        ...privateVideoStatements(env.DB, accountId, video, now, expiresAt),
-      );
+      if (!tooOld)
+        statements.push(
+          ...privateVideoStatements(env.DB, accountId, video, now, expiresAt),
+        );
       const position = normalizePosition(
         entry.snippet?.position,
         fallbackPosition,
@@ -1288,9 +1328,17 @@ async function syncMetadata(
   const threshold = isoInDays(5);
   const result = await env.DB.prepare(
     `SELECT video_id AS id FROM account_video_metadata
-     WHERE account_id=? AND expires_at <= ? ORDER BY expires_at ASC LIMIT ?`,
+     WHERE account_id=? AND expires_at <= ?
+       AND (?=0 OR json_extract(metadata,'$.publishedAt')>=?)
+     ORDER BY expires_at ASC LIMIT ?`,
   )
-    .bind(account.id, threshold, METADATA_RENEW_BATCH)
+    .bind(
+      account.id,
+      threshold,
+      isWebSubEnabled(env) ? 1 : 0,
+      oldestVideoDate(now),
+      METADATA_RENEW_BATCH,
+    )
     .all<{ id: string }>();
   const ids = (result.results ?? [])
     .map((row) => row.id)
@@ -1390,11 +1438,30 @@ export async function runScheduledSync(
   type: SyncType = "all",
 ): Promise<void> {
   if (env.MODE !== "real") return;
+  if (isWebSubEnabled(env)) {
+    // Keep discovery and account/weekly maintenance in separate invocations:
+    // a 15-entry RSS batch can use 30 D1 statements before its bookkeeping.
+    // Every tenth minute is reserved for existing Queue recovery/subscriptions
+    // and one weekly retention page; no additional infrastructure is needed.
+    if (
+      type === "rss" ||
+      (type === "all" && new Date().getUTCMinutes() % 10 !== 0)
+    ) {
+      await runChannelSync(env);
+      return;
+    }
+    if (type === "all") {
+      await runWeeklyVideoRetention(env);
+      type = "subscriptions";
+    }
+  }
   if (env.SYNC_QUEUE) return recoverAndScheduleSync(env);
   let accounts: AccountRow[] = [];
   try {
     const result = await env.DB.prepare(
-      `SELECT * FROM accounts WHERE mode = 'real' AND connected = 1 ORDER BY ${env.SYNC_PROFILE === "free" ? "COALESCE((SELECT last_run_at FROM sync_state WHERE account_id=accounts.id AND type='rss'), '')" : "updated_at"} ASC LIMIT ${env.SYNC_PROFILE === "free" ? 1 : 5}`,
+      `SELECT * FROM accounts WHERE mode = 'real' AND connected = 1
+       ${isWebSubEnabled(env) ? `AND (NOT EXISTS(SELECT 1 FROM sync_state WHERE account_id=accounts.id AND type='subscriptions' AND last_status='success' AND last_run_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 hours')) OR EXISTS(SELECT 1 FROM sync_state WHERE account_id=accounts.id AND type='subscriptions' AND cursor IS NOT NULL))` : ""}
+       ORDER BY ${isWebSubEnabled(env) ? "COALESCE((SELECT last_run_at FROM sync_state WHERE account_id=accounts.id AND type='subscriptions'), '')" : env.SYNC_PROFILE === "free" ? "COALESCE((SELECT last_run_at FROM sync_state WHERE account_id=accounts.id AND type='rss'), '')" : "updated_at"} ASC LIMIT ${env.SYNC_PROFILE === "free" ? 1 : 5}`,
     ).all<AccountRow>();
     accounts = result.results ?? [];
   } catch {

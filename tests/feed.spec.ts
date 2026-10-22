@@ -1,5 +1,98 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
+test("actualizar suscripciones se ofrece en Canales, no en Feed", async ({
+  page,
+}) => {
+  await page.goto("/feed");
+  await expect(
+    page.getByRole("heading", { name: "Feed", exact: true, level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Actualizar", exact: true }),
+  ).toHaveCount(0);
+  await page.goto("/channels");
+  await expect(
+    page.getByRole("heading", { name: "Canales", exact: true, level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Actualizar", exact: true }),
+  ).toBeVisible();
+});
+
+test("WebSub refresca el feed al volver visible y reinicia la paginación", async ({
+  page,
+}) => {
+  let revision = "first";
+  let polls = 0;
+  await page.route("**/api/session", (route) =>
+    route.fulfill({
+      json: {
+        mode: "real",
+        connected: true,
+        csrfToken: "test",
+        account: { name: "Fixture" },
+        capabilities: {
+          automaticDiscovery: true,
+          localPlaylists: true,
+          externalSync: true,
+        },
+      },
+    }),
+  );
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({ json: { watchThreshold: 80, theme: "system" } }),
+  );
+  await page.route("**/api/channels", (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route("**/api/feed/revision", (route) => {
+    polls++;
+    return route.fulfill({ json: { revision } });
+  });
+  await page.route("**/api/feed?**", (route) => {
+    const more = new URL(route.request().url()).searchParams.has("cursor");
+    return route.fulfill({
+      json: {
+        items: [
+          feedItem(
+            more ? "second" : revision,
+            more ? "Página anterior" : `Llegada ${revision}`,
+          ),
+        ],
+        nextCursor: more ? null : "next",
+      },
+    });
+  });
+  await page.goto("/feed");
+  await expect(
+    page.getByRole("heading", { name: "Llegada first" }),
+  ).toBeVisible();
+  await expect.poll(() => polls).toBe(1);
+  await page.getByRole("button", { name: "Cargar más vídeos" }).click();
+  await expect(page.locator(".video-card")).toHaveCount(2);
+  revision = "new";
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForTimeout(150);
+  expect(polls).toBe(1);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(
+    page.getByRole("heading", { name: "Llegada new" }),
+  ).toBeVisible();
+  await expect(page.locator(".video-card")).toHaveCount(1);
+});
+
 function feedItem(
   id: string,
   title: string,
@@ -200,7 +293,10 @@ test("selector de tipos, etiquetas y paginación", async ({ page }) => {
   await expect(shortTag).toHaveText("short");
   await expectNoOverlap(shortTag, shortCard.locator(".duration"));
   await expectNoOverlap(shortTag, shortCard.locator(".progress-track"));
-  await page.screenshot({path:"/tmp/alveo-video-types-mobile.png",fullPage:true});
+  await page.screenshot({
+    path: "/tmp/alveo-video-types-mobile.png",
+    fullPage: true,
+  });
 
   await videos.click();
   await live.click();

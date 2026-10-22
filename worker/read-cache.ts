@@ -4,6 +4,8 @@
  * becomes stale. Only metadata DTOs are stored; tokens and sessions never are.
  */
 import { toNumber } from "./db";
+import { isWebSubEnabled } from "./websub";
+import { readGlobalFeedRevision } from "./channel-sync";
 import { sha256Hex } from "./http";
 import type { Env, PlaylistSummary, Video } from "./types";
 
@@ -290,6 +292,18 @@ async function hydrateFeed(
   });
 }
 
+async function feedGeneration(env: Env, ownerId: string): Promise<string> {
+  const account = await readGeneration(env.DB, ownerId);
+  return isWebSubEnabled(env)
+    ? `${account}:global:${await readGlobalFeedRevision(env.DB)}`
+    : account;
+}
+
+/** Cheap authenticated polling: one account key and one singleton, no feed scan. */
+export async function feedRevision(env: Env, ownerId: string): Promise<string> {
+  return sha256Hex(await feedGeneration(env, ownerId));
+}
+
 export async function cachedFeed(
   env: ReadCacheEnv,
   ownerId: string,
@@ -299,7 +313,7 @@ export async function cachedFeed(
   const kv = cacheKv(env);
   if (!kv) return { value: await load(), cache: "disabled" };
 
-  const generation = await readGeneration(env.DB, ownerId);
+  const generation = await feedGeneration(env, ownerId);
   const key = await cacheKey("feed", ownerId, generation, normalizedQueryKey);
   const raw = await kvGet(kv, key);
   if (raw !== null) {

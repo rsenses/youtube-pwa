@@ -2,11 +2,17 @@
 
 Una PWA personal para seguir canales de YouTube a tu ritmo. React + TypeScript + Vite, un Worker y D1. Entorno local separado y **beta publicada en https://alveo.rsenses.com**.
 
+## WebSub híbrido
+
+Descubrimiento WebSub global por canal, reconciliación RSS diaria compartida, API de suscripciones separada y limpieza semanal segura. Ventana máxima de un año; los vídeos vistos por todos y fuera de listas no renuevan metadatos. Activado con autorización posterior en producción como `7a444ee5-e9f3-42ef-9a9d-6788d08d10c9`, con migraciones 0010/0011 aplicadas. El código sigue siendo opt-in (`WEBSUB_ENABLED` + secret); los presets locales no se han activado. Los tests usan hub/RSS simulados. En el arranque remoto se verificaron dos registros reales y una comprobación RSS; quedan incorporación gradual de canales, reintentos y recepción de un evento real por validar.
+
+Ver [contratos, pruebas, seguridad y preparación futura](docs/WEBSUB.md). Las cifras y reglas de RSS de 24 h descritas más abajo corresponden al modo anterior, que se mantiene mientras WebSub esté apagado. Las propuestas de optimización de listas siguen pendientes, no se implementan en este cambio.
+
 ## Beta Android publicada
 
 La URL está protegida por **Cloudflare Access**: pasa primero ese acceso; su configuración no se ha desactivado. El manifest usa cookies para poder cargarse tras autenticación.
 
-Abre **https://alveo.rsenses.com** en Chrome Android, pasa Access y usa «Instalar aplicación»/«Añadir a pantalla de inicio». Se necesita Internet. Versión publicada: `f62c344c-20e9-4352-b085-49002751e586` (optimización D1/KV y listas manuales). Comprobada localmente; falta verificación autenticada tras el restablecimiento de D1 y aplicar migraciones pendientes con `npm run setup`.
+Abre **https://alveo.rsenses.com** en Chrome Android, pasa Access y usa «Instalar aplicación»/«Añadir a pantalla de inicio». Se necesita Internet. Último despliegue previo a WebSub: `caf795fe-e772-4242-a4ac-5ca143ded7fd` (RSS reciente/KV, controles de suscripción y ajustes de Configuración). Ese despliegue fue sustituido por la activación WebSub indicada arriba.
 
 El manifest declara `standalone`, identidad/scope `/`, inicio `/feed` e iconos PNG 192/512. Chrome con perfil normal temporal devuelve cero errores de instalabilidad en la prueba local. Brave Android tiene un [reporte coincidente de instalación como acceso directo](https://github.com/brave/brave-browser/issues/56133): probar primero Chrome, sin desactivar Access. No se ha certificado la instalación en un teléfono ni el manifest autenticado remoto.
 
