@@ -30,6 +30,7 @@ beforeAll(async () => {
     "0006_retention_indexes",
     "0007_video_broadcast_status",
     "0008_incremental_sync",
+    "0012_playlist_unimported",
   ]) {
     const sql = (
       await readFile(
@@ -473,7 +474,7 @@ it("measures catalogue cost: current counts versus remote_item_count and local-o
     "writes",
   );
   expect(current45).toHaveLength(45);
-  expect(combinedBaseline.rows).toBeGreaterThan(baseline.rows);
+  expect(combinedBaseline.rows).toBeLessThan(baseline.rows);
 
   const candidate = meter();
   const proposed = await candidateCatalogue(candidate.db, "cost-owner");

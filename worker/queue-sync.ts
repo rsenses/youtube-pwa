@@ -74,6 +74,7 @@ interface State {
     startedAt: string;
     pageToken?: string;
     position: number;
+    seenItemIds?: string[];
   };
   metadataScope?: "public" | "owned";
   metadataCursor?: string;
@@ -473,7 +474,6 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
    SELECT ?,?,'youtube',?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM accounts WHERE id=? AND connected=1) AND (?='' OR EXISTS(SELECT 1 FROM playlists target WHERE target.id=? AND target.account_id=?)) ON CONFLICT(account_id,remote_id) DO UPDATE SET
    title=excluded.title,description=excluded.description,privacy_status=excluded.privacy_status,
    remote_item_count=excluded.remote_item_count,fetched_at=excluded.fetched_at,
-   items_synced_at=CASE WHEN playlists.remote_item_count IS NOT excluded.remote_item_count THEN NULL ELSE playlists.items_synced_at END,
    updated_at=excluded.updated_at WHERE playlists.updated_at<=?`,
       ).bind(
         s.playlistId || crypto.randomUUID(),
@@ -507,7 +507,7 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
       )
         .bind(account.id, s.startedAt, s.startedAt)
         .run();
-    s.phase = s.playlistId ? "playlist_items" : "done";
+    s.phase = "playlist_items";
   }
 }
 function videoFromApi(item: YouTubeVideoItem): ExternalVideo | null {
@@ -541,18 +541,19 @@ function videoFromApi(item: YouTubeVideoItem): ExternalVideo | null {
 async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
   if (!s.playlist) {
-    const p = await env.DB.prepare(
-      `SELECT id,remote_id FROM playlists WHERE account_id=? AND source='youtube' AND id>?
-   AND remote_id IS NOT NULL AND id=? AND (?=1 OR items_synced_at IS NULL OR items_synced_at<=?) ORDER BY id LIMIT 1`,
-    )
-      .bind(
-        account.id,
-        s.playlistCursor || "",
-        s.playlistId || "",
-        s.force ? 1 : 0,
-        isoInDays(-1),
-      )
-      .first<{ id: string; remote_id: string }>();
+    const p = s.playlistId
+      ? await env.DB.prepare(
+          "SELECT id,remote_id FROM playlists WHERE id=? AND id>? AND account_id=? AND source='youtube' AND remote_id IS NOT NULL",
+        )
+          .bind(s.playlistId, s.playlistCursor || "", account.id)
+          .first<{ id: string; remote_id: string }>()
+      : await env.DB.prepare(
+          `SELECT id,remote_id FROM playlists
+           WHERE account_id=? AND id>? AND source='youtube' AND items_synced_at IS NULL
+           ORDER BY id LIMIT 1`,
+        )
+          .bind(account.id, s.playlistCursor || "")
+          .first<{ id: string; remote_id: string }>();
     if (!p) {
       s.phase = s.playlistId ? "metadata" : "done";
       return;
@@ -563,9 +564,18 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       generation: crypto.randomUUID(),
       startedAt: now,
       position: 0,
+      seenItemIds: [],
     };
   }
   const p = s.playlist;
+  if (!p.seenItemIds) {
+    // Resume jobs created by older code from page one before diffing, so a
+    // partial legacy generation cannot remove unseen items.
+    p.seenItemIds = [];
+    p.pageToken = undefined;
+    p.position = 0;
+    p.startedAt = now;
+  }
   const owned = await env.DB.prepare(
     "SELECT id FROM playlists WHERE id=? AND account_id=? AND source='youtube'",
   )
@@ -584,28 +594,20 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   );
   if (!Array.isArray(data.items)) throw new ExternalError("invalid_response");
   const statements: D1PreparedStatement[] = [];
-  const retained = new Set<string>();
-  if (isWebSubEnabled(env)) {
-    const oldIds = data.items
-      .filter((entry) => {
-        const date =
-          entry.contentDetails?.videoPublishedAt || entry.snippet?.publishedAt;
-        return date && !isRecentEnough(date, now);
-      })
-      .map(
-        (entry) =>
-          entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId,
+  const remoteIds = data.items
+    .map((item) => item.id)
+    .filter((id): id is string => !!id);
+  const existing = remoteIds.length
+    ? await env.DB.prepare(
+        `SELECT remote_item_id, video_id, position FROM playlist_items
+         WHERE playlist_id=? AND remote_item_id IN (${remoteIds.map(() => "?").join(",")})`,
       )
-      .filter((id): id is string => !!id);
-    if (oldIds.length) {
-      const existing = await env.DB.prepare(
-        `SELECT id FROM videos WHERE id IN (${oldIds.map(() => "?").join(",")})`,
-      )
-        .bind(...oldIds)
-        .all<{ id: string }>();
-      for (const row of existing.results || []) retained.add(row.id);
-    }
-  }
+        .bind(p.id, ...remoteIds)
+        .all<{ remote_item_id: string; video_id: string; position: number }>()
+    : null;
+  const stored = new Map(
+    (existing?.results || []).map((item) => [item.remote_item_id, item]),
+  );
   for (const entry of data.items) {
     const id =
       entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId;
@@ -621,8 +623,14 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       !Number.isFinite(Date.parse(date))
     )
       throw new ExternalError("incomplete_playlist_item");
-    const tooOld = isWebSubEnabled(env) && !isRecentEnough(date, now);
-    if (tooOld && !retained.has(id)) {
+    const position = Math.max(0, Math.floor(snippet.position ?? p.position));
+    const previous = stored.get(entry.id);
+    p.seenItemIds?.push(entry.id);
+    if (
+      previous &&
+      previous.video_id === id &&
+      previous.position === position
+    ) {
       p.position++;
       continue;
     }
@@ -639,7 +647,7 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       viewCount: null,
       source: "youtube",
     };
-    if (!tooOld)
+    if (!previous || previous.video_id !== id)
       statements.push(
         ...privateVideoStatements(env.DB, account.id, v, now, isoInDays(25)),
       );
@@ -647,16 +655,8 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
       env.DB.prepare(
         `INSERT INTO playlist_items(id,playlist_id,video_id,remote_item_id,position,sync_generation,added_at)
    VALUES (?,?,?,?,?,?,?) ON CONFLICT(playlist_id,remote_item_id) DO UPDATE SET video_id=excluded.video_id,
-   position=excluded.position,sync_generation=excluded.sync_generation`,
-      ).bind(
-        crypto.randomUUID(),
-        p.id,
-        id,
-        entry.id,
-        Math.max(0, Math.floor(snippet.position ?? p.position)),
-        p.generation,
-        now,
-      ),
+   position=excluded.position`,
+      ).bind(crypto.randomUUID(), p.id, id, entry.id, position, null, now),
     );
     p.position++;
     s.items++;
@@ -664,14 +664,27 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   if (statements.length) await env.DB.batch(statements);
   p.pageToken = data.nextPageToken;
   if (!p.pageToken) {
-    await env.DB.batch([
+    const seen = new Set(p.seenItemIds || []);
+    const local = await env.DB.prepare(
+      "SELECT remote_item_id FROM playlist_items WHERE playlist_id=? AND added_at<?",
+    )
+      .bind(p.id, p.startedAt)
+      .all<{ remote_item_id: string | null }>();
+    const removals = (local.results || []).filter(
+      (item) => item.remote_item_id && !seen.has(item.remote_item_id),
+    );
+    const finish = removals.map((item) =>
       env.DB.prepare(
-        "DELETE FROM playlist_items WHERE playlist_id=? AND added_at<? AND sync_generation IS NOT NULL AND sync_generation<>?",
-      ).bind(p.id, p.startedAt, p.generation),
-      env.DB.prepare(
-        "UPDATE playlists SET items_synced_at=?,remote_item_count=(SELECT count(*) FROM playlist_items WHERE playlist_id=?),updated_at=? WHERE id=? AND account_id=?",
-      ).bind(now, p.id, now, p.id, account.id),
-    ]);
+        "DELETE FROM playlist_items WHERE playlist_id=? AND remote_item_id=?",
+      ).bind(p.id, item.remote_item_id),
+    );
+    for (let i = 0; i < finish.length; i += 80)
+      await env.DB.batch(finish.slice(i, i + 80));
+    await env.DB.prepare(
+      "UPDATE playlists SET items_synced_at=?,remote_item_count=?,updated_at=? WHERE id=? AND account_id=?",
+    )
+      .bind(now, seen.size, now, p.id, account.id)
+      .run();
     s.playlistCursor = p.id;
     s.processedPlaylists++;
     delete s.playlist;

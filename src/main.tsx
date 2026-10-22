@@ -1282,11 +1282,11 @@ function PlaylistForm({
   onDone: () => void;
   playlist?: PlaylistDetail;
 }) {
+  const { notify, session } = useApp();
   const [title, setTitle] = useState(playlist?.title || ""),
     [description, setDescription] = useState(playlist?.description || ""),
-    [source, setSource] = useState("local"),
+    [source] = useState(session.mode === "real" ? "youtube" : "local"),
     [busy, setBusy] = useState(false);
-  const { notify, session } = useApp();
   return (
     <form
       className="edit-panel"
@@ -1325,15 +1325,6 @@ function PlaylistForm({
           onChange={(e) => setDescription(e.target.value)}
         />
       </label>
-      {!playlist && session.mode === "real" && (
-        <label>
-          Guardar en
-          <select value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="local">Solo en Alveo</option>
-            <option value="youtube">YouTube (privada)</option>
-          </select>
-        </label>
-      )}
       <button className="button" disabled={busy}>
         Guardar lista
       </button>

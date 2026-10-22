@@ -5,12 +5,7 @@
  */
 import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
-import {
-  cachedFeed,
-  cachedPlaylists,
-  invalidateReads,
-  feedRevision,
-} from "./read-cache";
+import { cachedFeed, invalidateReads, feedRevision } from "./read-cache";
 import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
 import { isRecentEnough } from "./rss";
 import {
@@ -977,13 +972,9 @@ async function handleUnsubscribe(ctx: RouteContext): Promise<Response> {
 
 async function handleListPlaylists(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
-  const cached = await cachedPlaylists(
-    ctx.env,
-    account.id,
-    videoScope(ctx),
-    () => listPlaylists(ctx.env.DB, account.id, videoScope(ctx)),
-  );
-  return json({ items: cached.value }, 200, { "x-alveo-cache": cached.cache });
+  return json({
+    items: await listPlaylists(ctx.env.DB, account.id, videoScope(ctx)),
+  });
 }
 
 async function handleCreatePlaylist(ctx: RouteContext): Promise<Response> {
@@ -1002,6 +993,14 @@ async function handleCreatePlaylist(ctx: RouteContext): Promise<Response> {
     PLAYLIST_SOURCES,
     "source",
   );
+
+  if (ctx.env.MODE === "real" && source !== "youtube") {
+    throw new HttpError(
+      400,
+      "VALIDATION_ERROR",
+      "Las listas de una cuenta conectada se guardan en YouTube.",
+    );
+  }
 
   if (source === "youtube" && ctx.env.MODE === "demo") {
     throw new HttpError(
@@ -1167,7 +1166,15 @@ async function handleUpdatePlaylist(ctx: RouteContext): Promise<Response> {
       description,
     });
   }
-  await updatePlaylistRow(ctx.env.DB, playlistId, { title, description });
+  try {
+    await updatePlaylistRow(ctx.env.DB, playlistId, { title, description });
+  } catch {
+    throw new HttpError(
+      502,
+      "LOCAL_WRITE_FAILED",
+      "YouTube confirmó el cambio, pero no se pudo guardar en D1. Sincroniza el catálogo para recuperarlo.",
+    );
+  }
   return json({ id: playlistId, title, description, source: row.source });
 }
 
@@ -1199,7 +1206,15 @@ async function handleDeletePlaylist(ctx: RouteContext): Promise<Response> {
         throw error;
     }
   }
-  await deletePlaylistRow(ctx.env.DB, playlistId);
+  try {
+    await deletePlaylistRow(ctx.env.DB, playlistId);
+  } catch {
+    throw new HttpError(
+      502,
+      "LOCAL_WRITE_FAILED",
+      "YouTube confirmó el borrado, pero no se pudo guardar en D1. Sincroniza el catálogo para recuperarlo.",
+    );
+  }
   return json({
     deleted: true,
     id: playlistId,
@@ -1274,13 +1289,22 @@ async function handleAddPlaylistItem(ctx: RouteContext): Promise<Response> {
     }
   }
 
-  const itemId = await addPlaylistItemRow(
-    ctx.env.DB,
-    playlistId,
-    videoId,
-    position,
-    remoteItemId,
-  );
+  let itemId: string;
+  try {
+    itemId = await addPlaylistItemRow(
+      ctx.env.DB,
+      playlistId,
+      videoId,
+      position,
+      remoteItemId,
+    );
+  } catch {
+    throw new HttpError(
+      502,
+      "LOCAL_WRITE_FAILED",
+      "YouTube confirmó el elemento, pero no se pudo guardar en D1. Sincroniza esta lista para recuperarlo.",
+    );
+  }
   const fresh = await getVideo(
     ctx.env.DB,
     account.id,
@@ -1329,7 +1353,15 @@ async function handleDeletePlaylistItem(ctx: RouteContext): Promise<Response> {
         throw error;
     }
   }
-  await deletePlaylistItemRow(ctx.env.DB, item.id);
+  try {
+    await deletePlaylistItemRow(ctx.env.DB, item.id, playlistId);
+  } catch {
+    throw new HttpError(
+      502,
+      "LOCAL_WRITE_FAILED",
+      "YouTube confirmó la eliminación, pero no se pudo guardar en D1. Sincroniza esta lista para recuperarla.",
+    );
+  }
   return json({ deleted: true, id: item.id });
 }
 

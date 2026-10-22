@@ -841,7 +841,12 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     const channelId = "UClegacy-kv";
     await upsertExternalChannel(
       env.DB,
-      { id: channelId, title: "Legacy KV", description: "", thumbnailUrl: null },
+      {
+        id: channelId,
+        title: "Legacy KV",
+        description: "",
+        thumbnailUrl: null,
+      },
       future,
     );
     await upsertRemoteSubscription(env.DB, legacyAccount.id, channelId, null);
@@ -1024,9 +1029,6 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       expect(second.items).toBe(6);
       expect(second.status).toBe("success");
       expect(statements).toBeLessThanOrEqual(44);
-      await expect(
-        handleSync(freeEnv, freeAccount, "playlists"),
-      ).rejects.toMatchObject({ status: 503, code: "SYNC_NOT_AVAILABLE" });
       expect(calls).toHaveLength(2);
       const subscriptions = await env.DB.prepare(
         "SELECT count(*) AS n FROM subscriptions WHERE account_id='free-test' AND active=1",
@@ -1099,13 +1101,28 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       };
     }
     try {
+      const initialJobs: unknown[] = [];
+      env.SYNC_QUEUE = {
+        send: async (message: unknown) => {
+          initialJobs.push(message);
+        },
+      } as unknown as Queue;
       const a = await login();
+      env.SYNC_QUEUE = undefined;
       expect(a.response.headers.get("location")).toContain("connected=1");
       const accountA = (await env.DB.prepare(
         "SELECT * FROM accounts WHERE youtube_channel_id=?",
       )
         .bind(channelId)
         .first<AccountRow>())!;
+      expect(initialJobs).toHaveLength(1);
+      expect(
+        (
+          await env.DB.prepare("SELECT type FROM sync_jobs WHERE account_id=?")
+            .bind(accountA.id)
+            .first<{ type: string }>()
+        )?.type,
+      ).toBe("playlists");
       await upsertExternalChannel(
         env.DB,
         {

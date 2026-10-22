@@ -138,7 +138,7 @@ export function buildSessionInfo(
       rss: connected,
       comments: connected || Boolean(env.YOUTUBE_API_KEY),
       publicData: Boolean(env.YOUTUBE_API_KEY),
-      localPlaylists: true,
+      localPlaylists: env.MODE === "demo",
       automaticDiscovery: isWebSubEnabled(env),
     },
   };
@@ -520,7 +520,7 @@ async function findOrCreateOAuthAccount(
   env: Env,
   channel: { id: string; title: string },
   now: string,
-): Promise<{ accountId: string; name: string }> {
+): Promise<{ accountId: string; name: string; isNew: boolean }> {
   let account: AccountRow | null = null;
   if (channel?.id) {
     account = await env.DB.prepare(
@@ -539,7 +539,7 @@ async function findOrCreateOAuthAccount(
     )
       .bind(name, channel?.id ?? null, now, account.id)
       .run();
-    return { accountId: account.id, name };
+    return { accountId: account.id, name, isNew: false };
   }
 
   const accountId = crypto.randomUUID();
@@ -550,7 +550,7 @@ async function findOrCreateOAuthAccount(
   )
     .bind(accountId, fallbackName, channel?.id ?? null, now, now)
     .run();
-  return { accountId, name: fallbackName };
+  return { accountId, name: fallbackName, isNew: true };
 }
 
 export async function handleOAuthCallback(
@@ -626,6 +626,17 @@ export async function handleOAuthCallback(
     const account = await findOrCreateOAuthAccount(env, identity, now);
     await saveTokens(env, account.accountId, token);
     await ensurePreferences(env.DB, account.accountId);
+    if (account.isNew && env.SYNC_QUEUE) {
+      const connectedAccount = await env.DB.prepare(
+        "SELECT * FROM accounts WHERE id=?",
+      )
+        .bind(account.accountId)
+        .first<AccountRow>();
+      if (connectedAccount) {
+        const { startQueuedSync } = await import("./queue-sync");
+        await startQueuedSync(env, connectedAccount, "playlists", true);
+      }
+    }
     await linkSessionAccount(env.DB, context.session.id, account.accountId);
     await env.DB.prepare(
       "DELETE FROM oauth_attempts WHERE session_id = ? AND state_hash <> ?",

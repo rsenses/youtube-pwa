@@ -380,13 +380,6 @@ export async function handleSync(
   if (env.SYNC_QUEUE) return startQueuedSync(env, account, type);
   const requestedAll = type === "all";
   if (env.SYNC_PROFILE === "free") {
-    if (type === "playlists") {
-      throw new HttpError(
-        503,
-        "SYNC_NOT_AVAILABLE",
-        "La reimportación de listas de YouTube sigue pendiente en esta beta.",
-      );
-    }
     if (requestedAll) {
       const snapshot = await env.DB.prepare(
         "SELECT cursor,last_run_at,last_status FROM sync_state WHERE account_id=? AND type='subscriptions'",
@@ -463,7 +456,7 @@ async function runAll(env: Env, account: AccountRow): Promise<SyncOutcome> {
   const errors: string[] = [];
   let items = 0;
 
-  for (const type of ["subscriptions", "rss", "playlists"] as const) {
+  for (const type of ["subscriptions", "rss"] as const) {
     try {
       const result = await withLease(env, account, type, () =>
         runType(env, account, type),
@@ -1232,15 +1225,11 @@ async function syncPlaylists(
   const candidatesResult = await env.DB.prepare(
     `SELECT id, remote_id AS remoteId FROM playlists
      WHERE account_id = ? AND source = 'youtube' AND remote_id IS NOT NULL
-       AND (items_synced_at IS NULL OR items_synced_at < ?)
+       AND items_synced_at IS NULL
      ORDER BY COALESCE(items_synced_at, '') ASC, id ASC
      LIMIT ?`,
   )
-    .bind(
-      account.id,
-      new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-      PLAYLIST_IMPORT_BATCH,
-    )
+    .bind(account.id, PLAYLIST_IMPORT_BATCH)
     .all<PlaylistImportRow>();
   const candidates = candidatesResult.results ?? [];
 
@@ -1280,9 +1269,9 @@ async function syncPlaylists(
   const pendingRow = await env.DB.prepare(
     `SELECT COUNT(*) AS pending FROM playlists
     WHERE account_id = ? AND source = 'youtube' AND remote_id IS NOT NULL
-      AND (items_synced_at IS NULL OR items_synced_at < ?)`,
+      AND items_synced_at IS NULL`,
   )
-    .bind(account.id, new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+    .bind(account.id)
     .first<{ pending: number }>();
   const pendingPlaylists = pendingRow?.pending ?? 0;
   const incomplete =

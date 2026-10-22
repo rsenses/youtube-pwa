@@ -26,7 +26,8 @@ let pending: Array<{ body: SyncMessage; retry?: boolean }>,
 let failSend: boolean,
   failMark: boolean,
   statements: number,
-  maxStatements: number;
+  maxStatements: number,
+  playlistMutations: number;
 let failItems: boolean, failFeed: boolean;
 const future = "2099-01-01T00:00:00.000Z";
 const old = "2020-01-01T00:00:00.000Z";
@@ -86,6 +87,7 @@ beforeEach(async () => {
     "0005_queued_sync.sql",
     "0006_retention_indexes.sql",
     "0007_video_broadcast_status.sql",
+    "0012_playlist_unimported.sql",
     // Exercise compatibility before optional watermark backfill migration 0008.
   ]) {
     const sql = (
@@ -107,11 +109,16 @@ beforeEach(async () => {
   failFeed = false;
   statements = 0;
   maxStatements = 0;
+  playlistMutations = 0;
   const counting = new Proxy(db, {
     get(target, key) {
       if (key === "prepare")
         return (sql: string) => {
           statements++;
+          if (
+            /^(INSERT INTO|DELETE FROM|UPDATE) playlist_items/i.test(sql.trim())
+          )
+            playlistMutations++;
           const stmt = target.prepare(sql);
           if (!sql.includes("SET enqueued_version=")) return stmt;
           return new Proxy(stmt, {
@@ -410,7 +417,8 @@ describe("durable queue synchronization", () => {
           return new Response(null, { status: 304 });
         const suffix = owner === channels[0] ? "1" : "2";
         const recent = [`Fresh00000${suffix}`];
-        if (withNewEntries) recent.push(`Fresh00000${suffix === "1" ? "3" : "4"}`);
+        if (withNewEntries)
+          recent.push(`Fresh00000${suffix === "1" ? "3" : "4"}`);
         const entries = [
           `<entry><yt:videoId>Old0000000${suffix}</yt:videoId><yt:channelId>${owner}</yt:channelId><title>Old</title><published>2020-01-01T00:00:00Z</published></entry>`,
           ...recent.map(
@@ -491,8 +499,14 @@ describe("durable queue synchronization", () => {
       )?.n,
     ).toBe(2);
     expect(
-      (await readRssCheck(env, account.id, channels[0], new Date().toISOString()))
-        ?.etag,
+      (
+        await readRssCheck(
+          env,
+          account.id,
+          channels[0],
+          new Date().toISOString(),
+        )
+      )?.etag,
     ).toBe("fixture-" + channels[0]);
   }, 25000);
   it("keeps RSS validators isolated between accounts sharing a channel", async () => {
@@ -527,8 +541,9 @@ describe("durable queue synchronization", () => {
     conditional.length = 0;
     await startQueuedSync(
       env,
-      (await env.DB.prepare("SELECT * FROM accounts WHERE id='partner'")
-        .first<AccountRow>())!,
+      (await env.DB.prepare(
+        "SELECT * FROM accounts WHERE id='partner'",
+      ).first<AccountRow>())!,
       "rss",
     );
     await drain();
@@ -560,8 +575,7 @@ describe("durable queue synchronization", () => {
       const tracked = new Proxy(statement, {
         get(target, key) {
           if (key === "bind")
-            return (...args: unknown[]) =>
-              track(target.bind(...args), sql);
+            return (...args: unknown[]) => track(target.bind(...args), sql);
           const value = Reflect.get(target, key, target);
           return typeof value === "function" ? value.bind(target) : value;
         },
@@ -656,7 +670,9 @@ describe("durable queue synchronization", () => {
       items: 0,
     });
     expect(
-      prepared.filter((sql) => sql.trimStart().startsWith("INSERT INTO videos")),
+      prepared.filter((sql) =>
+        sql.trimStart().startsWith("INSERT INTO videos"),
+      ),
     ).toHaveLength(0);
     expect(
       prepared.filter((sql) => sql.trimStart().startsWith("UPDATE channels")),
@@ -973,7 +989,7 @@ describe("durable queue synchronization", () => {
       )?.expired,
     ).toBeNull();
   }, 15000);
-  it("catalog refresh imports names only and manual refresh is limited to its owner and selected list", async () => {
+  it("imports new lists once, then leaves existing content for individual refresh", async () => {
     const id = await catalog();
     expect(
       (
@@ -981,7 +997,17 @@ describe("durable queue synchronization", () => {
           n: number;
         }>()
       )?.n,
-    ).toBe(0);
+    ).toBe(11);
+    vi.mocked(fetch).mockClear();
+    await startQueuedSync(env, account, "playlists");
+    await drain();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([url]) =>
+          new URL(String(url)).pathname.endsWith("/playlistItems"),
+        ),
+    ).toHaveLength(0);
     await env.DB.prepare(
       "INSERT INTO playlists(id,account_id,source,remote_id,title,fetched_at,created_at,updated_at) VALUES ('untouched',?,'youtube','PLother','Untouched',?,?,?)",
     )
@@ -1043,6 +1069,79 @@ describe("durable queue synchronization", () => {
           .first<{ n: number }>()
       )?.n,
     ).toBe(11);
+  });
+  it("writes only item differences and keeps duplicate video references distinct", async () => {
+    const id = await catalog();
+    playlistMutations = 0;
+    await startQueuedSync(env, account, "playlists", true, id);
+    await drain();
+    expect(playlistMutations).toBe(0);
+
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const response = await original(input, init);
+        const url = new URL(input);
+        if (
+          !url.pathname.endsWith("/playlistItems") ||
+          url.searchParams.has("pageToken")
+        )
+          return response;
+        const body = (await response.json()) as {
+          items: Array<{
+            id: string;
+            snippet: { position: number; resourceId: { videoId: string } };
+            contentDetails: { videoId: string };
+          }>;
+        };
+        body.items = body.items.filter((item) => item.id !== "remote-item-1");
+        body.items[0].snippet.position = 9;
+        body.items.push({
+          ...body.items[0],
+          id: "duplicate-item",
+          snippet: { ...body.items[0].snippet, position: 1 },
+        });
+        return Response.json(body);
+      }),
+    );
+    playlistMutations = 0;
+    await startQueuedSync(env, account, "playlists", true, id);
+    await drain();
+    expect(playlistMutations).toBe(3);
+    const rows = await env.DB.prepare(
+      "SELECT remote_item_id,video_id,position FROM playlist_items WHERE playlist_id=? ORDER BY position,id",
+    )
+      .bind(id)
+      .all<{ remote_item_id: string; video_id: string; position: number }>();
+    expect(rows.results).toHaveLength(11);
+    expect(
+      rows.results?.some((item) => item.remote_item_id === "remote-item-1"),
+    ).toBe(false);
+    expect(
+      rows.results?.find((item) => item.remote_item_id === "remote-item-0")
+        ?.position,
+    ).toBe(9);
+    expect(
+      rows.results?.find((item) => item.remote_item_id === "duplicate-item")
+        ?.video_id,
+    ).toBe("priv0000000");
+  }, 15000);
+  it("keeps playlist membership visible after video metadata expires", async () => {
+    const id = await catalog();
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE videos SET title='',purged_at=? WHERE id='priv0000000'",
+      ).bind(old),
+      env.DB.prepare(
+        "DELETE FROM account_video_metadata WHERE account_id=? AND video_id='priv0000000'",
+      ).bind(account.id),
+    ]);
+    const items = await getPlaylistItems(env.DB, account.id, id, "external");
+    expect(items).toHaveLength(11);
+    expect(items.find((item) => item.id === "priv0000000")?.title).toBe(
+      "Vídeo sin metadatos",
+    );
   });
   it("does not repopulate private metadata after an account disconnects", async () => {
     await env.DB.prepare("UPDATE accounts SET connected=0 WHERE id=?")

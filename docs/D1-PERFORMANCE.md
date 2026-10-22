@@ -1,5 +1,13 @@
 # Lecturas D1 y caché
 
+## Listas de YouTube — implementación local 22-10-2026
+
+La lectura del catálogo usa D1 directamente. Para listas YouTube cuyo recuento remoto ya se conoce, el fixture de 43 listas y 2 locales pasa de 8.147 lecturas a 104; las listas antiguas con `remote_item_count=NULL` conservan el recuento local hasta la siguiente sincronización. La navegación no consulta YouTube ni usa la caché KV de listas.
+
+La importación inicial del catálogo incorpora el contenido de listas todavía no importadas. Una actualización posterior del catálogo no lee el contenido de listas existentes. La sincronización individual identifica cada relación por `remote_item_id`, compara páginas de diez elementos contra los registros de esa lista y escribe solo altas, cambios de vídeo/posición y bajas tras recibir todas las páginas. La prueba de una lista sin cambios prepara cero escrituras de relaciones; otra prueba cubre una alta duplicando el vídeo, una baja y un cambio de posición. Se mantiene el refresco de metadatos de vídeo acotado a la lista elegida.
+
+La migración 0012 añade un índice parcial para hallar la siguiente lista no importada y un índice que cubre la comparación final de IDs. `EXPLAIN QUERY PLAN` local confirma `idx_playlists_unimported`, `idx_playlist_items_remote` para las búsquedas por página y `COVERING INDEX idx_playlist_items_snapshot` para el barrido final. Estas cifras son del fixture Miniflare/SQLite, no analíticas remotas. El detalle sigue cargando todos los elementos de la lista abierta: 193 lecturas para 63 elementos en el fixture; una paginación posterior podría reducir ese coste inicial.
+
 ## WebSub global: medición local nueva
 
 El modo opt-in y sus reglas actuales se describen en [WEBSUB.md](WEBSUB.md). Esta sección sustituye el contrato de RSS de 24 h/insert-only/KV por cuenta **sólo cuando WebSub está activo**. Las mediciones previas más abajo son históricas y de escenarios distintos; no se pueden restar directamente como ahorro total de producción.
@@ -65,7 +73,7 @@ Estas cifras excluyen explícitamente suscripciones/OAuth, listas y elementos, A
 
 Las cifras son locales y no una certificación del consumo total de producción. El caso de KV usa un namespace simulado con D1 real; no mide propagación ni tasa de aciertos de KV en Cloudflare. Autenticación, mantenimiento, otras rutas y otros usuarios añaden lecturas. `video_discoveries` no se elimina ni se borran sus datos históricos: solo permanece su purga de retención existente (>30 días). Ejecutar `npm run profile:d1` para repetir el perfil; sus umbrales cubren feed y hits, no el presupuesto completo de la cuenta.
 
-## Medición de propuestas de listas (sin implementar)
+## Medición histórica de propuestas de listas
 
 Medición local con el fixture sintético de `tests/d1-cost.test.ts` y Miniflare/D1, sin cambios en `worker/`, esquema ni migraciones. Baseline del árbol local `cb13589`; no se consultó D1 remota ni la versión desplegada `caf795fe-e772-4242-a4ac-5ca143ded7fd`. Las cifras son `meta.rows_read`/`meta.rows_written` de D1 local, no consumo de producción. Ejecutar `npx vitest run tests/d1-cost.test.ts --silent=false` o `npm run profile:d1`; el test imprime cada cifra.
 
@@ -98,7 +106,7 @@ El test compara pertenencia y orden: los 18 primeros de la página 1 coinciden c
 
 Sincronización de una lista de 30 relaciones sin cambios: el UPSERT actual de `queue-sync.ts` con `sync_generation` nuevo ejecuta 30 sentencias, 30 lecturas y **90 filas escritas** (D1 cuenta tabla e índices). El `DELETE` final de ausentes escribe 0 (30 lecturas acumuladas) y el `UPDATE playlists` que recalcula el count añade 1 escritura (91 lecturas/91 escrituras acumuladas). La propuesta de cambio-only lee las 30 relaciones (30 lecturas), calcula un diff 0/0/0 y escribe **0 filas de relación**. Con el fixture cambiado (1 reordenación, 1 alta y 1 baja), el diff de prueba detecta 1/1/1 y aplicar solo esos cambios cuesta 8 filas escritas y 2 lecturas, además de las 30 de leer el snapshot; incluye mantenimiento de índices y no es una implementación de reconciliación.
 
-No se implementó la sincronización propuesta: no se midió el estado durable de IDs vistas (JSON de job), la retirada final preservando cambios posteriores al inicio, ni escrituras de metadata privada, cola, leases o jobs; se excluyen explícitamente. Tampoco se ejecutaron suite completa, build ni deploy. Estas cifras no certifican producción ni que las propuestas sean correctas, solo el coste D1 local de las consultas y del fixture descritos.
+En el momento de esta medición no se había implementado la sincronización propuesta: no se midió el estado durable de IDs vistos (JSON de job), la retirada final preservando cambios posteriores al inicio, ni escrituras de metadata privada, cola, leases o jobs; se excluyen explícitamente. Tampoco se habían ejecutado suite completa, build ni deploy. Estas cifras históricas no certifican producción ni el coste de la implementación descrita arriba.
 
 ## Caché y consistencia
 

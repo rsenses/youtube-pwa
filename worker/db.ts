@@ -303,11 +303,6 @@ export async function purgeExpiredMetadata(
       )
       .bind(now),
     db
-      .prepare(
-        `DELETE FROM playlists WHERE source = 'youtube' AND fetched_at <= ?`,
-      )
-      .bind(isoInDays(-30, new Date(now))),
-    db
       .prepare("DELETE FROM video_discoveries WHERE last_seen_at <= ?")
       .bind(isoInDays(-30, new Date(now))),
   ]);
@@ -824,12 +819,13 @@ export async function listPlaylists(
   const result = await db
     .prepare(
       `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status,
-              (SELECT COUNT(*) FROM playlist_items pi
-               JOIN videos v ON v.id = pi.video_id
-               WHERE pi.playlist_id = p.id AND (v.purged_at IS NULL OR EXISTS(
-    SELECT 1 FROM account_video_metadata own WHERE own.video_id=v.id AND own.account_id=p.account_id
-    AND own.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')))
-                 AND ${videoSourceCondition(scope)}) AS item_count
+              CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
+                (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
+                 WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
+                   SELECT 1 FROM account_video_metadata own WHERE own.video_id=v.id AND own.account_id=p.account_id
+                   AND own.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+                   AND ${videoSourceCondition(scope)})
+              END AS item_count
        FROM playlists p
        WHERE p.account_id = ?
        ORDER BY p.source ASC, p.title COLLATE NOCASE ASC`,
@@ -848,12 +844,13 @@ export async function getPlaylistRow(
   const row = await db
     .prepare(
       `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status,
-              (SELECT COUNT(*) FROM playlist_items pi
-               JOIN videos v ON v.id = pi.video_id
-               WHERE pi.playlist_id = p.id AND (v.purged_at IS NULL OR EXISTS(
-    SELECT 1 FROM account_video_metadata own WHERE own.video_id=v.id AND own.account_id=p.account_id
-    AND own.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')))
-                 AND ${videoSourceCondition(scope)}) AS item_count
+              CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
+                (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
+                 WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
+                   SELECT 1 FROM account_video_metadata own WHERE own.video_id=v.id AND own.account_id=p.account_id
+                   AND own.expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+                   AND ${videoSourceCondition(scope)})
+              END AS item_count
        FROM playlists p WHERE p.id = ? AND p.account_id = ?`,
     )
     .bind(playlistId, accountId)
@@ -874,12 +871,16 @@ export async function getPlaylistItems(
        JOIN videos v ON v.id = pi.video_id
        LEFT JOIN watch_states ws ON ws.video_id = v.id AND ws.account_id = ?
        ${OWNED_VIDEO_JOIN}
-       WHERE pi.playlist_id = ? AND (v.purged_at IS NULL OR pm.video_id IS NOT NULL) AND ${videoSourceCondition(scope)}
+       WHERE pi.playlist_id = ? AND ${videoSourceCondition(scope)}
        ORDER BY pi.position ASC, pi.id ASC`,
     )
     .bind(accountId, accountId, playlistId)
     .all<Record<string, unknown>>();
-  return (result.results ?? []).map(mapVideoRow);
+  return (result.results ?? []).map((row) => {
+    const video = mapVideoRow(row);
+    if (!video.title) video.title = "Vídeo sin metadatos";
+    return video;
+  });
 }
 
 export async function getPlaylistDetail(
@@ -981,13 +982,19 @@ export async function addPlaylistItemRow(
   now: string = nowIso(),
 ): Promise<string> {
   const id = crypto.randomUUID();
-  await db
-    .prepare(
-      `INSERT INTO playlist_items (id, playlist_id, video_id, remote_item_id, position, sync_generation, added_at)
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO playlist_items (id, playlist_id, video_id, remote_item_id, position, sync_generation, added_at)
        VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    )
-    .bind(id, playlistId, videoId, remoteItemId, position, now)
-    .run();
+      )
+      .bind(id, playlistId, videoId, remoteItemId, position, now),
+    db
+      .prepare(
+        "UPDATE playlists SET remote_item_count=COALESCE(remote_item_count,0)+1,updated_at=? WHERE id=? AND source='youtube'",
+      )
+      .bind(now, playlistId),
+  ]);
   return id;
 }
 
@@ -1020,11 +1027,18 @@ export async function getPlaylistItem(
 export async function deletePlaylistItemRow(
   db: D1Database,
   itemId: string,
+  playlistId: string,
 ): Promise<void> {
-  await db
-    .prepare("DELETE FROM playlist_items WHERE id = ?")
-    .bind(itemId)
-    .run();
+  await db.batch([
+    db
+      .prepare("DELETE FROM playlist_items WHERE id = ? AND playlist_id=?")
+      .bind(itemId, playlistId),
+    db
+      .prepare(
+        "UPDATE playlists SET remote_item_count=MAX(0,COALESCE(remote_item_count,0)-1),updated_at=? WHERE id=? AND source='youtube'",
+      )
+      .bind(nowIso(), playlistId),
+  ]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1090,9 +1104,7 @@ export function externalVideoStatement(
   // RSS imports only durable new video rows; an existing row keeps its details
   // and watch state untouched. The normal upsert remains for metadata reads.
   if (insertOnly)
-    return db
-      .prepare(`${insert} ON CONFLICT(id) DO NOTHING`)
-      .bind(...values);
+    return db.prepare(`${insert} ON CONFLICT(id) DO NOTHING`).bind(...values);
   return db
     .prepare(
       `${insert}
