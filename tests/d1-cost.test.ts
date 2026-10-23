@@ -7,6 +7,7 @@ import {
   getSuggestions,
   getPlaylistDetail,
   getPlaylistRow,
+  getKnownVideoStates,
 } from "../worker/db";
 import { cachedFeed } from "../worker/read-cache";
 import type { Env } from "../worker/types";
@@ -211,6 +212,14 @@ it("reports playlist and local-suggestion costs", async () => {
       .length,
   ).toBeGreaterThan(0);
   console.log("D1 cost local suggestions", r.rows);
+});
+it("hydrates personal state for a YouTube channel page with bounded D1 reads", async () => {
+  const m = meter();
+  const ids = Array.from({ length: 18 }, (_, i) => `v${String(i).padStart(10, "0")}`);
+  const states = await getKnownVideoStates(m.db, "cost-owner", ids);
+  expect(states.size).toBe(18);
+  expect(m.writes).toBe(0);
+  expect(m.rows).toBeLessThan(100);
 });
 
 /* ------------------------------------------------------------------ */

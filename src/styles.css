@@ -561,6 +561,38 @@ label > textarea {
 .global-search input:focus-visible { outline: none; }
 .search-result { min-width: 0; }
 .search-result .save-panel { margin-top: 8px; }
+.video-options-result { min-width: 0; }
+.video-options-result:has(.video-card-menu-items) { position: relative; z-index: 2; }
+.video-options-result .save-panel { margin-top: 8px; }
+.video-card-menu { position: relative; }
+.video-card-menu > button { display: grid; place-items: center; }
+.video-card-menu-items {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    z-index: 3;
+    width: 190px;
+    max-width: calc(100vw - 32px);
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+.video-card-menu-items > button,
+.video-card-menu-items > a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    text-align: left;
+}
+.video-card-menu-items > button:hover,
+.video-card-menu-items > a:hover { background: var(--surface-2); }
 .video-card {
     position: relative;
     min-width: 0;

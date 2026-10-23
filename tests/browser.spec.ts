@@ -589,7 +589,7 @@ test("public comments, replies, paging, avatar fallback and related provenance",
       "Por etiquetas o título. Solo al pedirlo.",
       { exact: true },
     ),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "Ocultar vídeos relacionados", exact: true })
     .click();

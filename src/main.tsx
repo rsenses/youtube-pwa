@@ -939,7 +939,7 @@ function Feed() {
         )}
         <div className="video-grid">
           {videos.map((v) => (
-            <VideoCard key={v.id} video={v} onChange={change} swipeToWatch />
+            <VideoOptionsCard key={v.id} video={v} onChange={change} swipeToWatch />
           ))}
         </div>
         {busy && !videos.length && (
@@ -997,6 +997,53 @@ function Feed() {
       </section>
     </>
   );
+}
+function VideoOptionsCard({ video, onChange, swipeToWatch = false, extra }: {
+  video: Video;
+  onChange: (video: Video) => void;
+  swipeToWatch?: boolean;
+  extra?: ReactNode;
+}) {
+  const [save, setSave] = useState(false);
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!menu.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+    };
+  }, [open]);
+  return <div className="video-options-result">
+    <VideoCard video={video} onChange={onChange} swipeToWatch={swipeToWatch} extra={extra} renderAction={({ toggleWatched, busy }) =>
+      <div className="video-card-menu" ref={menu}>
+        <button className="icon-button" aria-label={`Opciones de ${video.title}`}
+          aria-expanded={open} title="Opciones del vídeo" onClick={() => setOpen((value) => !value)}>
+          <Icon name="more" size={18} />
+        </button>
+        {open && <div className="video-card-menu-items">
+          <button disabled={busy} onClick={() => {
+            setOpen(false);
+            toggleWatched();
+          }}><Icon name="check" size={17} />{video.watched ? "Marcar pendiente" : "Marcar visto"}</button>
+          <button onClick={() => {
+            setOpen(false);
+            setSave(true);
+          }}><Icon name="save" size={17} />Guardar</button>
+          <Link to={`/channels/${video.channelId}`}><Icon name="channels" size={17} />Ver canal</Link>
+        </div>}
+      </div>
+    } />
+    {save && <SaveVideo id={video.id} onDone={() => setSave(false)} />}
+  </div>;
 }
 function Channels() {
   const [q, setQ] = useState(""),
@@ -1131,6 +1178,7 @@ function Channels() {
 }
 function ChannelPage() {
   const { id } = useParams();
+  const { session } = useApp();
   const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
   const channel = channels?.items.find((c) => c.id === id);
   return (
@@ -1143,21 +1191,24 @@ function ChannelPage() {
         action={<SubscribeChannel key={id} channelId={id!} />}
         description={
           channel?.description ||
-          "Vídeos de este canal guardados en la biblioteca."
+          (session.capabilities.publicData
+            ? "Vídeos públicos de este canal en YouTube."
+            : "Vídeos de este canal guardados en la biblioteca.")
         }
       />
-      <ChannelVideos id={id!} />
+      <ChannelVideos key={id} id={id!} />
     </>
   );
 }
 function ChannelVideos({ id }: { id: string }) {
-  const [version, setVersion] = useState(0),
-    [extra, setExtra] = useState<Video[]>([]),
-    [cursor, setCursor] = useState<string | null>(null);
+  const [extra, setExtra] = useState<Video[]>([]),
+    [cursor, setCursor] = useState<string | null>(null),
+    [busy, setBusy] = useState(false),
+    [updates, setUpdates] = useState<Record<string, Video>>({});
   const { data, error, loading } = useResource<{
     items: Video[];
     nextCursor: string | null;
-  }>(`/api/channels/${id}/videos?limit=12`, version);
+  }>(`/api/channels/${id}/videos?limit=18`);
   const { notify } = useApp();
   useEffect(() => {
     setExtra([]);
@@ -1169,10 +1220,10 @@ function ChannelVideos({ id }: { id: string }) {
       {loading && <State>Cargando vídeos…</State>}
       <div className="video-grid">
         {[...(data?.items || []), ...extra].map((v) => (
-          <VideoCard
+          <VideoOptionsCard
             key={v.id}
-            video={v}
-            onChange={() => setVersion((x) => x + 1)}
+            video={updates[v.id] || v}
+            onChange={(updated) => setUpdates((current) => ({ ...current, [updated.id]: updated }))}
           />
         ))}
       </div>
@@ -1182,22 +1233,26 @@ function ChannelVideos({ id }: { id: string }) {
       {cursor && (
         <button
           className="button secondary"
+          disabled={busy}
           onClick={async () => {
+            setBusy(true);
             try {
               const d = await api<{
                 items: Video[];
                 nextCursor: string | null;
               }>(
-                `/api/channels/${id}/videos?limit=12&cursor=${encodeURIComponent(cursor)}`,
+                `/api/channels/${id}/videos?limit=18&cursor=${encodeURIComponent(cursor)}`,
               );
               setExtra((x) => [...x, ...d.items]);
               setCursor(d.nextCursor);
             } catch (e) {
               notify((e as Error).message);
+            } finally {
+              setBusy(false);
             }
           }}
         >
-          Cargar más
+          {busy ? "Cargando…" : "Cargar más"}
         </button>
       )}
     </>
@@ -1416,7 +1471,7 @@ function PlaylistPage() {
   const [version, setVersion] = useState(0),
     [edit, setEdit] = useState(false),
     [confirm, setConfirm] = useState(false);
-  const { data, error, loading } = useResource<PlaylistDetail>(
+  const { data, setData, error, loading } = useResource<PlaylistDetail>(
     `/api/playlists/${id}`,
     version,
   );
@@ -1493,10 +1548,15 @@ function PlaylistPage() {
           )}
           <div className="video-grid">
             {data.items.map((v) => (
-              <VideoCard
+              <VideoOptionsCard
                 key={v.playlistItemId}
                 video={v}
-                onChange={() => setVersion((x) => x + 1)}
+                onChange={(updated) => setData((current) => current && ({
+                  ...current,
+                  items: current.items.map((item) => item.id === updated.id
+                    ? { ...updated, playlistItemId: item.playlistItemId }
+                    : item),
+                }))}
                 extra={
                   <button
                     className="icon-button"

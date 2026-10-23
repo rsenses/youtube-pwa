@@ -151,6 +151,7 @@ export function VideoCard({
     swipeToWatch = false,
     extra,
     action,
+    renderAction,
 }: {
     video: Video;
     onChange?: (v: Video) => void;
@@ -158,6 +159,7 @@ export function VideoCard({
     swipeToWatch?: boolean;
     extra?: ReactNode;
     action?: ReactNode;
+    renderAction?: (controls: { toggleWatched: () => void; busy: boolean }) => ReactNode;
 }) {
     const [busy, setBusy] = useState(false),
         [error, setError] = useState(""),
@@ -287,7 +289,7 @@ export function VideoCard({
                 )}
             </div>
             <div className="card-actions">
-                {action ?? (!video.transient && <button
+                {renderAction?.({ toggleWatched: () => void toggle(), busy }) ?? action ?? (!video.transient && <button
                     className={`icon-button ${video.watched ? "active" : ""}`}
                     aria-label={
                         video.watched ? "Marcar pendiente" : "Marcar visto"

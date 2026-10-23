@@ -436,6 +436,37 @@ export async function getVideo(
   return row ? mapVideoRow(row) : null;
 }
 
+/** Personal state for a bounded page of public YouTube previews, in one indexed read. */
+export async function getKnownVideoStates(
+  db: D1Database,
+  accountId: string,
+  ids: string[],
+): Promise<Map<string, Pick<Video, "watched" | "positionSeconds" | "percent" | "manual" | "revision"> & { persisted: boolean }>> {
+  if (!ids.length) return new Map();
+  const rows = await db.prepare(
+    `SELECT v.id, COALESCE(ws.watched,0) AS watched,
+      COALESCE(ws.position_seconds,0) AS positionSeconds,
+      COALESCE(ws.percent,0) AS percent,
+      COALESCE(ws.manual,0) AS manual,
+      COALESCE(ws.revision,0) AS revision,
+      CASE WHEN ${ACCOUNT_VIDEO_CONDITION} THEN 1 ELSE 0 END AS persisted
+     FROM videos v
+     LEFT JOIN watch_states ws ON ws.video_id=v.id AND ws.account_id=?
+     ${OWNED_VIDEO_JOIN}
+     WHERE v.id IN (${ids.map(() => "?").join(",")})
+       AND ${videoSourceCondition("external")}
+       AND (${ACCOUNT_VIDEO_CONDITION} OR ws.video_id IS NOT NULL)`,
+  ).bind(accountId, accountId, ...ids).all<Record<string, unknown>>();
+  return new Map((rows.results ?? []).map((row) => [String(row.id), {
+    watched: toNumber(row.watched) === 1,
+    positionSeconds: Math.max(0, toNumber(row.positionSeconds)),
+    percent: Math.max(0, Math.min(100, toNumber(row.percent))),
+    manual: toNumber(row.manual) === 1,
+    revision: toNumber(row.revision),
+    persisted: toNumber(row.persisted) === 1,
+  }]));
+}
+
 export async function getSuggestions(
   db: D1Database,
   accountId: string,

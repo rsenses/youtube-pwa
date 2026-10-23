@@ -111,6 +111,7 @@ import {
 
 import {
   ensurePublicExamples,
+  listPublicChannelVideos,
   getPublicPreview,
   getPublicVideo,
   getPublicSuggestions,
@@ -555,12 +556,14 @@ async function handleSetWatchState(ctx: RouteContext): Promise<Response> {
   const videoId = routeParam(ctx, 0, "videoId");
   const body = await readJsonObject(ctx.request);
   const watched = requiredBoolean(body, "watched");
-  const existing = await getVideo(
+  let existing = await getVideo(
     ctx.env.DB,
     account.id,
     videoId,
     videoScope(ctx),
   );
+  if (!existing && ctx.env.YOUTUBE_API_KEY)
+    existing = await getPublicVideo(ctx.env, account.id, videoId);
   if (!existing) {
     throw new HttpError(
       404,
@@ -801,6 +804,13 @@ async function handleChannelVideos(ctx: RouteContext): Promise<Response> {
       "CHANNEL_NOT_FOUND",
       "Channel not found or its metadata expired.",
     );
+  }
+  if (ctx.env.YOUTUBE_API_KEY) {
+    const limit = parseLimit(ctx.url, 18, 50);
+    const cursor = assertPageToken(ctx.url.searchParams.get("cursor"));
+    return json(await listPublicChannelVideos(
+      ctx.env, account.id, channelId, cursor || undefined, limit,
+    ));
   }
   const status = parseEnum(
     ctx.url.searchParams.get("status") ?? "all",

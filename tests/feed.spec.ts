@@ -220,6 +220,83 @@ test("feed de 18, paginación y cabecera sin estado duplicado", async ({
   await page.screenshot({ path: "/tmp/alveo-feed-18-desktop.png" });
 });
 
+test("menú del feed permite guardar, ver canal y marcar visto", async ({ page }) => {
+  const video = feedItem("menu", "Vídeo con opciones");
+  const saved: string[] = [];
+  await page.route("**/api/feed?**", (route) => route.fulfill({
+    json: { items: [video], nextCursor: null },
+  }));
+  await page.route("**/api/playlists", (route) => route.fulfill({
+    json: { items: [{ id: "list-1", title: "Favoritos", source: "local" }] },
+  }));
+  await page.route("**/api/playlists/list-1/items", (route) => {
+    saved.push((route.request().postDataJSON() as { videoId: string }).videoId);
+    return route.fulfill({ json: { id: "saved" } });
+  });
+  await page.route("**/api/videos/*/watch-state", (route) => route.fulfill({
+    json: { ...video, watched: true },
+  }));
+  await page.goto("/feed");
+  const options = page.getByRole("button", { name: "Opciones de Vídeo con opciones" });
+  await options.click();
+  await page.screenshot({ path: "/tmp/alveo-feed-menu-mobile.png" });
+  await expect(page.getByRole("button", { name: "Marcar visto", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Guardar", exact: true }).click();
+  await page.getByRole("button", { name: /Favoritos/ }).click();
+  expect(saved).toEqual([video.id]);
+  await options.click();
+  await page.getByRole("link", { name: "Ver canal" }).click();
+  await expect(page).toHaveURL(/\/channels\/UCfixture$/);
+  await page.goto("/feed");
+  await page.getByRole("button", { name: "Opciones de Vídeo con opciones" }).click();
+  await page.getByRole("button", { name: "Marcar visto", exact: true }).click();
+  await expect(page.locator(".video-card")).toHaveCount(0);
+});
+
+test("canal muestra 18 subidas y pagina vídeos antiguos", async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [{
+    id: "UCfixture", title: "Canal de prueba", description: "",
+    thumbnailUrl: "", subscribed: false,
+  }] } }));
+  await page.route("**/api/channels/UCfixture/videos?**", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const second = url.searchParams.has("cursor");
+    return route.fulfill({ json: {
+      items: Array.from({ length: second ? 1 : 18 }, (_, i) =>
+        feedItem(`old${i + (second ? 18 : 0)}`, `Vídeo antiguo ${i + (second ? 18 : 0)}`, {
+          publishedAt: "2010-01-01T00:00:00Z", transient: true,
+        })),
+      nextCursor: second ? null : "NEXT",
+    } });
+  });
+  await page.goto("/channels/UCfixture");
+  await expect(page.locator(".video-card")).toHaveCount(18);
+  expect(requests[0].searchParams.get("limit")).toBe("18");
+  await page.getByRole("button", { name: "Opciones de Vídeo antiguo 0" }).click();
+  await expect(page.getByRole("button", { name: "Marcar visto", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Guardar", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ver canal" })).toBeVisible();
+  await page.getByRole("button", { name: "Cargar más" }).click();
+  await expect(page.locator(".video-card")).toHaveCount(19);
+  expect(requests[1].searchParams.get("cursor")).toBe("NEXT");
+  expect(requests[1].searchParams.get("limit")).toBe("18");
+});
+
+test("lista conserva quitar y ofrece el menú de vídeo", async ({ page }) => {
+  await page.route("**/api/playlists/list-1", (route) => route.fulfill({ json: {
+    id: "list-1", title: "Favoritos", description: "", source: "local", itemCount: 1,
+    items: [{ ...feedItem("listed", "Vídeo en lista"), playlistItemId: "item-1" }],
+  } }));
+  await page.goto("/playlists/list-1");
+  await expect(page.getByRole("button", { name: "Quitar de la lista" })).toBeVisible();
+  await page.getByRole("button", { name: "Opciones de Vídeo en lista" }).click();
+  await expect(page.getByRole("button", { name: "Marcar visto", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Guardar", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ver canal" })).toBeVisible();
+});
+
 test("selector de tipos, etiquetas y paginación", async ({ page }) => {
   const requests: URL[] = [];
   await page.route("**/api/feed?**", async (route) => {
