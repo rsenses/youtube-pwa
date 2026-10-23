@@ -114,6 +114,7 @@ import {
   getPublicPreview,
   getPublicVideo,
   getPublicSuggestions,
+  searchPublicVideos,
   storeVideos,
 } from "./public-youtube";
 import {
@@ -1496,6 +1497,18 @@ async function handleDeleteDataRequest(ctx: RouteContext): Promise<Response> {
 
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/api\/session$/, handler: handleSession },
+  {
+    method: "GET",
+    pattern: /^\/api\/search$/,
+    handler: async (ctx) => {
+      requireAccount(ctx);
+      const query = (ctx.url.searchParams.get("q") || "").trim().replace(/\s+/g, " ");
+      if (query.length < 2 || query.length > 120)
+        throw new HttpError(400, "INVALID_QUERY", "Escribe entre 2 y 120 caracteres.");
+      const pageToken = assertPageToken(ctx.url.searchParams.get("pageToken"));
+      return json(await searchPublicVideos(ctx.env, query, pageToken || undefined));
+    },
+  },
   { method: "GET", pattern: /^\/api\/feed$/, handler: handleFeed },
   {
     method: "GET",

@@ -48,6 +48,7 @@ const AppContext = createContext<{
 const useApp = () => useContext(AppContext);
 const navigation = [
   ["/feed", "feed", "Feed"],
+  ["/search", "search", "Buscar"],
   ["/channels", "channels", "Canales"],
   ["/playlists", "lists", "Listas"],
   ["/settings", "settings", "Configuración"],
@@ -476,6 +477,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<Navigate to="/feed" replace />} />
                 <Route path="/feed" element={<Feed />} />
+                <Route path="/search" element={<SearchPage />} />
                 <Route path="/channels" element={<Channels />} />
                 <Route path="/channels/:id" element={<ChannelPage />} />
                 <Route path="/playlists" element={<Playlists />} />
@@ -1778,6 +1780,87 @@ function Watch({ id }: { id: string }) {
       </aside>
     </div>
   );
+}
+function SearchPage() {
+  const [params, setParams] = useSearchParams();
+  const query = params.get("q") || "";
+  const [draft, setDraft] = useState(query);
+  const [items, setItems] = useState<Video[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [version, setVersion] = useState(0);
+  const generation = useRef(0);
+  useEffect(() => { setDraft(query); }, [query]);
+  useEffect(() => {
+    generation.current++;
+    const current = generation.current;
+    setItems([]);
+    setCursor(null);
+    setError("");
+    if (query.trim().length < 2) { setBusy(false); return; }
+    const controller = new AbortController();
+    setBusy(true);
+    api<{ items: Video[]; nextPageToken: string | null }>(
+      `/api/search?q=${encodeURIComponent(query)}`, "GET", undefined, controller.signal,
+    ).then((result) => {
+      if (current === generation.current) {
+        setItems(result.items);
+        setCursor(result.nextPageToken);
+      }
+    }).catch((cause) => {
+      if (!controller.signal.aborted) setError((cause as Error).message);
+    }).finally(() => {
+      if (current === generation.current) setBusy(false);
+    });
+    return () => controller.abort();
+  }, [query, version]);
+  async function more() {
+    if (!cursor || busy) return;
+    const current = generation.current;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<{ items: Video[]; nextPageToken: string | null }>(
+        `/api/search?q=${encodeURIComponent(query)}&pageToken=${encodeURIComponent(cursor)}`,
+      );
+      if (current !== generation.current) return;
+      setItems((before) => [...before, ...result.items.filter((item) => !before.some((old) => old.id === item.id))]);
+      setCursor(result.nextPageToken);
+    } catch (cause) {
+      if (current === generation.current) setError((cause as Error).message);
+    } finally {
+      if (current === generation.current) setBusy(false);
+    }
+  }
+  return <>
+    <PageHeading title="Buscar vídeos" description="Busca en YouTube y guarda lo que te interese en una lista." />
+    <form className="global-search" role="search" onSubmit={(event) => {
+      event.preventDefault();
+      const next = draft.trim().replace(/\s+/g, " ");
+      if (next.length >= 2 && next.length <= 120) setParams({ q: next });
+    }}>
+      <Icon name="search" size={20} />
+      <input autoFocus aria-label="Buscar vídeos en YouTube" placeholder="Busca vídeos en YouTube" value={draft}
+        maxLength={120} onChange={(event) => setDraft(event.target.value)} />
+      <button className="button small" disabled={draft.trim().length < 2 || busy}>Buscar</button>
+    </form>
+    {!query && <State>Escribe lo que buscas y pulsa Buscar.</State>}
+    {error && <State error>{error} <button onClick={() => setVersion((n) => n + 1)}>Reintentar</button></State>}
+    <div className="video-grid">
+      {items.map((video) => <SearchVideoCard key={video.id} video={video} />)}
+    </div>
+    {busy && <State>Buscando vídeos…</State>}
+    {query && !busy && !error && !items.length && <State>No encontramos vídeos para «{query}».</State>}
+    {cursor && <button className="button secondary load-more" disabled={busy} onClick={() => void more()}>Cargar más</button>}
+  </>;
+}
+function SearchVideoCard({ video }: { video: Video }) {
+  const [save, setSave] = useState(false);
+  return <div className="search-result"><VideoCard video={video} action={<button className="icon-button" aria-label={`Guardar ${video.title} en una lista`}
+    aria-expanded={save} title="Guardar en una lista" onClick={() => setSave((value) => !value)}>
+    <Icon name="save" size={18} />
+  </button>} />{save && <SaveVideo id={video.id} onDone={() => setSave(false)} />}</div>;
 }
 function SaveVideo({ id, onDone }: { id: string; onDone: () => void }) {
   const { data, error, loading } = useResource<{ items: PlaylistSummary[] }>(

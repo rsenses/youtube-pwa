@@ -282,22 +282,25 @@ async function requestJson(
 
 export interface YouTubeSearchList {
   items?: Array<{ id?: { videoId?: string } }>;
+  nextPageToken?: string;
 }
 
 /** Public search, never personalized recommendations or arbitrary URLs. */
 export async function searchVideos(
   credential: ReadCredential,
   query: string,
+  options: { maxResults?: number; pageToken?: string } = {},
 ): Promise<YouTubeSearchList> {
   return (await requestJson(credential, "GET", "search", {
     part: "snippet",
     type: "video",
     q: query,
-    maxResults: 8,
+    maxResults: options.maxResults ?? 8,
+    ...(options.pageToken ? { pageToken: options.pageToken } : {}),
     order: "relevance",
     videoEmbeddable: "true",
     videoSyndicated: "true",
-    fields: "items(id/videoId)",
+    fields: "nextPageToken,items(id/videoId)",
   })) as unknown as YouTubeSearchList;
 }
 

@@ -25,7 +25,7 @@ import {
 import { readLimitedText } from "../worker/http";
 import { SESSION_COOKIE } from "../worker/http";
 import { writeRssCheck } from "../worker/rss-cache";
-import { getPublicVideo, getPublicSuggestions } from "../worker/public-youtube";
+import { getPublicVideo, getPublicSuggestions, searchPublicVideos } from "../worker/public-youtube";
 import { listCommentThreads, listCommentReplies } from "../worker/youtube";
 
 const mf = new Miniflare(
@@ -123,6 +123,56 @@ afterAll(async () => {
 });
 
 describe("D1 synchronization outcomes with mocked external responses", () => {
+  it("searches old public videos across pages without creating D1 rows and reuses KV results", async () => {
+    const firstId = "search00001";
+    const secondId = "search00002";
+    const channelId = "UC" + "s".repeat(22);
+    const calls: string[] = [];
+    const kv = new Map<string, string>();
+    env.YOUTUBE_API_KEY = "unit-test-key-only";
+    env.READ_CACHE = {
+      get: async (key: string) => kv.get(key) ?? null,
+      put: async (key: string, value: string) => { kv.set(key, value); },
+    } as unknown as KVNamespace;
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname.endsWith("/search")) {
+        expect(url.searchParams.get("q")).toBe("old film");
+        expect(url.searchParams.get("maxResults")).toBe("20");
+        expect(url.searchParams.has("publishedAfter")).toBe(false);
+        return Response.json({
+          items: [{ id: { videoId: url.searchParams.has("pageToken") ? secondId : firstId } }],
+          nextPageToken: url.searchParams.has("pageToken") ? undefined : "NEXT",
+        });
+      }
+      if (url.pathname.endsWith("/videos")) return Response.json({ items: [{
+        id: url.searchParams.get("id"),
+        snippet: { title: "Old film", description: "Archived", channelId,
+          channelTitle: "Archive", publishedAt: "2020-01-01T00:00:00Z",
+          liveBroadcastContent: "none" },
+        status: { privacyStatus: "public", embeddable: true },
+        contentDetails: { duration: "PT2M" },
+      }] });
+      throw new Error("Unexpected endpoint");
+    }));
+    try {
+      const first = await searchPublicVideos(env, "old film");
+      expect(first.items.map((item) => item.id)).toEqual([firstId]);
+      expect(first.items[0].transient).toBe(true);
+      expect(first.nextPageToken).toBe("NEXT");
+      const callCount = calls.length;
+      expect(await searchPublicVideos(env, "old film")).toEqual(first);
+      expect(calls).toHaveLength(callCount);
+      const second = await searchPublicVideos(env, "old film", "NEXT");
+      expect(second.items.map((item) => item.id)).toEqual([secondId]);
+      for (const id of [firstId, secondId]) expect(await env.DB.prepare(
+        "SELECT id FROM videos WHERE id=?",
+      ).bind(id).first()).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("filters effective video types before pagination and isolates owner broadcast metadata", async () => {
     const channel = {
       id: "UCtypes",

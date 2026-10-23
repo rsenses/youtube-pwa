@@ -7,6 +7,44 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async ({ page }) => {
+  const searched: string[] = [];
+  const saved: string[] = [];
+  await page.route("**/api/search?*", (route) => {
+    const url = new URL(route.request().url());
+    searched.push(url.searchParams.get("q") || "");
+    const next = url.searchParams.has("pageToken");
+    const id = next ? "search00002" : "search00001";
+    return route.fulfill({ json: { items: [{ id, transient: true, title: next ? "Segundo vídeo" : "Primer vídeo",
+      channelId: "UC" + "s".repeat(22), channelTitle: "Canal de prueba", thumbnailUrl: "",
+      publishedAt: "2020-01-01T00:00:00Z", description: "", durationSeconds: 120,
+      isLive: false, liveBroadcastContent: "none", watched: false, positionSeconds: 0,
+      percent: 0, manual: false, viewCount: null, revision: 0 }], nextPageToken: next ? null : "NEXT" } });
+  });
+  await page.route("**/api/playlists", (route) => route.fulfill({ json: { items: [
+    { id: "list-1", title: "Favoritos", source: "local", itemCount: 0 },
+  ] } }));
+  await page.route("**/api/playlists/list-1/items", (route) => {
+    saved.push((route.request().postDataJSON() as { videoId: string }).videoId);
+    return route.fulfill({ json: { id: "item-1" } });
+  });
+  await page.goto("/feed");
+  await page.getByRole("link", { name: "Buscar" }).click();
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+  const input = page.getByRole("textbox", { name: "Buscar vídeos en YouTube" });
+  await expect(input).toBeFocused();
+  await input.fill("old film");
+  await page.getByRole("button", { name: "Buscar", exact: true }).click();
+  await expect(page.locator(".search-result .video-card")).toHaveCount(1);
+  await expect(page.locator(".search-result").getByRole("button", { name: "Marcar visto" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Cargar más" }).click();
+  await expect(page.locator(".search-result .video-card")).toHaveCount(2);
+  await page.getByRole("button", { name: "Guardar Primer vídeo en una lista" }).click();
+  await page.getByRole("button", { name: /Favoritos/ }).click();
+  expect(saved).toEqual(["search00001"]);
+  expect(searched).toEqual(["old film", "old film"]);
+});
+
 test("suscripción desde vídeo respeta permisos y evita repetir la escritura", async ({ page }) => {
   let writes = false;
   let subscribed = false;

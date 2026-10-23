@@ -144,12 +144,14 @@ export function VideoCard({
     compact = false,
     swipeToWatch = false,
     extra,
+    action,
 }: {
     video: Video;
     onChange?: (v: Video) => void;
     compact?: boolean;
     swipeToWatch?: boolean;
     extra?: ReactNode;
+    action?: ReactNode;
 }) {
     const [busy, setBusy] = useState(false),
         [error, setError] = useState(""),
@@ -279,7 +281,7 @@ export function VideoCard({
                 )}
             </div>
             <div className="card-actions">
-                {!video.transient && <button
+                {action ?? (!video.transient && <button
                     className={`icon-button ${video.watched ? "active" : ""}`}
                     aria-label={
                         video.watched ? "Marcar pendiente" : "Marcar visto"
@@ -289,7 +291,7 @@ export function VideoCard({
                     disabled={busy}
                 >
                     <Icon name="check" size={18} />
-                </button>}
+                </button>)}
             </div>
         </article>
     );

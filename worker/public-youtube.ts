@@ -384,3 +384,49 @@ export async function getPublicSuggestions(
   if (publicSource) await cachePreviews(env, cacheKey, suggestions);
   return suggestions.slice(0, limit);
 }
+
+/** A public text search reads YouTube directly; only an explicit list save writes D1. */
+export async function searchPublicVideos(
+  env: Env,
+  query: string,
+  pageToken?: string,
+): Promise<{ items: Video[]; nextPageToken: string | null }> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${query.toLocaleLowerCase()}\n${pageToken || ""}`));
+  const key = `youtube-search:v1:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  if (env.READ_CACHE) {
+    try {
+      const raw = await env.READ_CACHE.get(key);
+      if (raw) {
+        const cached: unknown = JSON.parse(raw);
+        if (
+          cached && typeof cached === "object" &&
+          "items" in cached && Array.isArray(cached.items) &&
+          cached.items.length <= 20 &&
+          cached.items.every((item: unknown) =>
+            item && typeof item === "object" && "id" in item &&
+            typeof item.id === "string" && VIDEO_ID.test(item.id) &&
+            "transient" in item && item.transient === true,
+          ) &&
+          "nextPageToken" in cached &&
+          (cached.nextPageToken === null || typeof cached.nextPageToken === "string")
+        ) return cached as { items: Video[]; nextPageToken: string | null };
+      }
+    } catch { /* Cache is optional. */ }
+  }
+  const results = await searchVideos(credential(env), query, { maxResults: 20, pageToken });
+  if (!Array.isArray(results.items)) throw new ExternalError("invalid_response");
+  const ids = [...new Set(results.items.map((item) => item.id?.videoId).filter(
+    (id): id is string => typeof id === "string" && VIDEO_ID.test(id),
+  ))];
+  const details = ids.length ? await listVideos(credential(env), ids) : { items: [] };
+  if (!Array.isArray(details.items)) throw new ExternalError("invalid_response");
+  const byId = new Map(details.items.map((item) => [item.id, publicPreview(item)]));
+  const value = {
+    items: ids.map((id) => byId.get(id)).filter((item): item is Video => item != null),
+    nextPageToken: typeof results.nextPageToken === "string" ? results.nextPageToken : null,
+  };
+  try {
+    await env.READ_CACHE?.put(key, JSON.stringify(value), { expirationTtl: value.items.length ? 600 : 60 });
+  } catch { /* Cache is optional. */ }
+  return value;
+}
