@@ -31,6 +31,8 @@ export interface Env extends Omit<
 
 export interface Video {
   id: string;
+  /** Public API preview; it has no persisted watch state until saved. */
+  transient?: boolean;
   title: string;
   channelId: string;
   channelTitle: string;

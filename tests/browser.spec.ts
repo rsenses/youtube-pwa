@@ -439,7 +439,7 @@ test("public comments, replies, paging, avatar fallback and related provenance",
     return route.fulfill({
       json: {
         items: [
-          { ...video, id: "abcDEF12345", title: "Same-channel video fixture" },
+          { ...video, id: "abcDEF12345", title: "Same-channel video fixture", transient: true },
         ],
         source: "youtube-search",
       },
@@ -517,6 +517,9 @@ test("public comments, replies, paging, avatar fallback and related provenance",
     page.getByRole("heading", { name: "Same-channel video fixture" }),
   ).toBeVisible();
   expect(suggestionRequests).toBe(1);
+  await expect(page.locator(".watch-related .video-card").getByRole("button", {
+    name: "Marcar visto",
+  })).toHaveCount(0);
   await expect(
     page.getByText(
       "Por etiquetas o título. Solo al pedirlo.",
@@ -551,4 +554,33 @@ test("public comments, replies, paging, avatar fallback and related provenance",
       () => document.documentElement.scrollWidth > innerWidth,
     ),
   ).toBe(false);
+});
+
+test("transient preview can be watched without creating progress or watch state", async ({ page }) => {
+  const id = "OldVideo001";
+  await page.route(`**/api/videos/${id}`, (route) => route.fulfill({ json: {
+    id,
+    transient: true,
+    title: "Old preview",
+    channelId: "UC" + "o".repeat(22),
+    channelTitle: "Archive",
+    thumbnailUrl: "",
+    publishedAt: "2020-01-01T00:00:00Z",
+    description: "",
+    durationSeconds: 300,
+    watched: false,
+    manual: false,
+    positionSeconds: 0,
+    percent: 0,
+  } }));
+  const writes: string[] = [];
+  await page.route(`**/api/videos/${id}/**`, (route) => {
+    if (route.request().method() !== "GET") writes.push(route.request().url());
+    return route.fulfill({ status: 500, json: { error: "Unexpected write" } });
+  });
+  await page.goto(`/watch/${id}`);
+  await expect(page.getByRole("heading", { name: "Old preview" })).toBeVisible();
+  await expect(page.getByText("Guárdalo en una lista para registrar tu progreso.")).toBeVisible();
+  await expect(page.locator(".watch-actions").getByRole("button", { name: "Marcar visto" })).toHaveCount(0);
+  expect(writes).toEqual([]);
 });

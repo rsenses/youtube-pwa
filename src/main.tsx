@@ -1643,7 +1643,7 @@ function Watch({ id }: { id: string }) {
               channelId={video.channelId}
             />
             <div className="watch-actions">
-              <button
+              {!video.transient && <button
                 className={`button small ${video.watched ? "" : "secondary"}`}
                 onClick={async () => {
                   try {
@@ -1664,7 +1664,7 @@ function Watch({ id }: { id: string }) {
               >
                 <Icon name="check" size={16} />
                 {video.watched ? "Visto" : "Marcar visto"}
-              </button>
+              </button>}
               <button
                 className={`button small secondary ${save ? "selected" : ""}`}
                 aria-expanded={save}
@@ -1685,7 +1685,14 @@ function Watch({ id }: { id: string }) {
               </a>
             </div>
           </div>
-          {save && <SaveVideo id={id} onDone={() => setSave(false)} />}
+          {save && <SaveVideo id={id} onDone={() => {
+            setSave(false);
+            void api<Video>(`/api/videos/${id}`).then(change)
+              .catch((e) => notify((e as Error).message));
+          }} />}
+          {video.transient && (
+            <p className="muted-note">Guárdalo en una lista para registrar tu progreso.</p>
+          )}
           <details className="description">
             <summary>
               Descripción

@@ -6,7 +6,7 @@
  * YouTube channel feed derived from a stored channel id (no arbitrary URLs).
  */
 import { isWebSubEnabled } from "./websub";
-import { isRecentEnough, oldestVideoDate } from "./rss";
+import { oldestVideoDate } from "./rss";
 import { runChannelSync } from "./channel-sync";
 import { runWeeklyVideoRetention } from "./video-retention";
 import type { AccountRow, Env, SyncRun } from "./types";
@@ -679,7 +679,9 @@ async function loadRssChannels(
     "s.account_id = ?",
     "s.active = 1",
     "s.excluded = 0",
-    ...(force ? [] : ["(c.rss_next_attempt_at IS NULL OR c.rss_next_attempt_at <= ?)"]),
+    ...(force
+      ? []
+      : ["(c.rss_next_attempt_at IS NULL OR c.rss_next_attempt_at <= ?)"]),
   ];
   const params: Array<string | number> = force ? [accountId] : [accountId, now];
   if (cursor) {
@@ -838,7 +840,11 @@ async function fetchAndStoreFeed(
   return { items: videos.length, skipped };
 }
 
-async function syncRss(env: Env, account: AccountRow, force = false): Promise<SyncOutcome> {
+async function syncRss(
+  env: Env,
+  account: AccountRow,
+  force = false,
+): Promise<SyncOutcome> {
   requireConnectedAccount(account);
   const now = nowIso();
   const state = await env.DB.prepare(
@@ -1028,29 +1034,6 @@ async function importPlaylistItems(
     if (!Array.isArray(data.items)) throw new ExternalError("invalid_response");
     const entries: YouTubePlaylistItemEntry[] = data.items;
     const statements: D1PreparedStatement[] = [];
-    const retained = new Set<string>();
-    if (isWebSubEnabled(env)) {
-      const oldIds = entries
-        .filter((entry) => {
-          const date =
-            entry.contentDetails?.videoPublishedAt ||
-            entry.snippet?.publishedAt;
-          return date && !isRecentEnough(date, now);
-        })
-        .map(
-          (entry) =>
-            entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId,
-        )
-        .filter((id): id is string => !!id);
-      if (oldIds.length) {
-        const existing = await env.DB.prepare(
-          `SELECT id FROM videos WHERE id IN (${oldIds.map(() => "?").join(",")})`,
-        )
-          .bind(...oldIds)
-          .all<{ id: string }>();
-        for (const row of existing.results || []) retained.add(row.id);
-      }
-    }
     for (const entry of entries) {
       const videoId =
         entry.contentDetails?.videoId ||
@@ -1078,11 +1061,6 @@ async function importPlaylistItems(
         fallbackPosition += 1;
         continue;
       }
-      const tooOld = isWebSubEnabled(env) && !isRecentEnough(publishedAt, now);
-      if (tooOld && !retained.has(videoId)) {
-        fallbackPosition++;
-        continue;
-      }
       const video: ExternalVideo = {
         id: videoId,
         channelId: snippet?.videoOwnerChannelId || snippet?.channelId || "",
@@ -1099,10 +1077,9 @@ async function importPlaylistItems(
         viewCount: null,
         source: "youtube",
       };
-      if (!tooOld)
-        statements.push(
-          ...privateVideoStatements(env.DB, accountId, video, now, expiresAt),
-        );
+      statements.push(
+        ...privateVideoStatements(env.DB, accountId, video, now, expiresAt),
+      );
       const position = normalizePosition(
         entry.snippet?.position,
         fallbackPosition,
@@ -1311,7 +1288,9 @@ async function syncMetadata(
   const result = await env.DB.prepare(
     `SELECT video_id AS id FROM account_video_metadata
      WHERE account_id=? AND expires_at <= ?
-       AND (?=0 OR json_extract(metadata,'$.publishedAt')>=?)
+       AND (?=0 OR json_extract(metadata,'$.publishedAt')>=?
+         OR EXISTS(SELECT 1 FROM playlist_items pi JOIN playlists p ON p.id=pi.playlist_id
+           WHERE pi.video_id=account_video_metadata.video_id AND p.account_id=?))
      ORDER BY expires_at ASC LIMIT ?`,
   )
     .bind(
@@ -1319,6 +1298,7 @@ async function syncMetadata(
       threshold,
       isWebSubEnabled(env) ? 1 : 0,
       oldestVideoDate(now),
+      account.id,
       METADATA_RENEW_BATCH,
     )
     .all<{ id: string }>();

@@ -263,7 +263,9 @@ export function VideoCard({
                     </time>
                     <span>·</span>
                     <span>
-                        {video.watched
+                        {video.transient
+                            ? "Descubierto en YouTube"
+                            : video.watched
                             ? "Visto"
                             : video.percent > 0
                               ? "En curso"
@@ -277,7 +279,7 @@ export function VideoCard({
                 )}
             </div>
             <div className="card-actions">
-                <button
+                {!video.transient && <button
                     className={`icon-button ${video.watched ? "active" : ""}`}
                     aria-label={
                         video.watched ? "Marcar pendiente" : "Marcar visto"
@@ -287,7 +289,7 @@ export function VideoCard({
                     disabled={busy}
                 >
                     <Icon name="check" size={18} />
-                </button>
+                </button>}
             </div>
         </article>
     );

@@ -85,6 +85,7 @@ export function Player({
         let lastTime = 0;
         let inFlight = false;
         const persist = async () => {
+            if (video.transient) return;
             const p = player.current;
             if (!p || inFlight || cancelled) return;
             let seconds = 0,
@@ -158,10 +159,11 @@ export function Player({
                                 p.getIframe().title =
                                     "Reproductor oficial de YouTube";
                             }
-                            timer = window.setInterval(() => {
-                                if (player.current?.getPlayerState() === 1)
-                                    void persist();
-                            }, 5000);
+                            if (!video.transient)
+                                timer = window.setInterval(() => {
+                                    if (player.current?.getPlayerState() === 1)
+                                        void persist();
+                                }, 5000);
                         },
                         onStateChange: (event: { data: number }) => {
                             if (event.data === 0 || event.data === 2)
@@ -188,7 +190,7 @@ export function Player({
             player.current?.destroy();
             player.current = null;
         };
-    }, [fictional, video.id, revisionRef]);
+    }, [fictional, video.id, video.transient, revisionRef]);
     return (
         <section className="player-section" aria-label="Reproducción">
             <div className="player-viewport">

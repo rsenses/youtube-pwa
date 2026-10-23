@@ -84,6 +84,7 @@ async function cacheIds(
 export async function storeVideos(
   env: Env,
   items: YouTubeVideoItem[],
+  allowOld = false,
 ): Promise<string[]> {
   const ids: string[] = [];
   const statements: D1PreparedStatement[] = [];
@@ -100,7 +101,8 @@ export async function storeVideos(
       !Number.isFinite(Date.parse(s.publishedAt))
     )
       continue;
-    if (isWebSubEnabled(env) && !isRecentEnough(s.publishedAt)) continue;
+    if (!allowOld && isWebSubEnabled(env) && !isRecentEnough(s.publishedAt))
+      continue;
     const expiresAt = isoInDays(25);
     statements.push(
       externalChannelStatement(
@@ -147,6 +149,110 @@ export async function storeVideos(
   return ids;
 }
 
+function publicPreview(item: YouTubeVideoItem): Video | null {
+  const s = item.snippet;
+  if (
+    item.status?.privacyStatus !== "public" ||
+    item.status.embeddable === false ||
+    !item.id ||
+    !VIDEO_ID.test(item.id) ||
+    !s?.channelId ||
+    !CHANNEL_ID.test(s.channelId) ||
+    !s.title ||
+    !s.publishedAt ||
+    !Number.isFinite(Date.parse(s.publishedAt))
+  )
+    return null;
+  return {
+    id: item.id,
+    transient: true,
+    title: sanitizeText(s.title, 500),
+    channelId: s.channelId,
+    channelTitle: sanitizeText(s.channelTitle, 300),
+    thumbnailUrl: pickThumbnailUrl(s.thumbnails),
+    publishedAt: new Date(s.publishedAt).toISOString(),
+    description: sanitizeText(s.description, 5000),
+    durationSeconds: parseIsoDuration(item.contentDetails?.duration),
+    isLive: s.liveBroadcastContent !== "none",
+    liveBroadcastContent: s.liveBroadcastContent ?? null,
+    watched: false,
+    positionSeconds: 0,
+    percent: 0,
+    manual: false,
+    viewCount:
+      item.statistics?.viewCount && /^\d{1,15}$/.test(item.statistics.viewCount)
+        ? Number(item.statistics.viewCount)
+        : null,
+    revision: 0,
+  };
+}
+
+async function cachedPreviews(env: Env, key: string): Promise<Video[] | null> {
+  if (!env.READ_CACHE) return null;
+  try {
+    const raw = await env.READ_CACHE.get(key);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (
+      !Array.isArray(value) ||
+      value.length > 8 ||
+      !value.every(
+        (v) =>
+          v &&
+          typeof v === "object" &&
+          typeof v.id === "string" &&
+          VIDEO_ID.test(v.id) &&
+          v.transient === true,
+      )
+    )
+      return null;
+    return value as Video[];
+  } catch {
+    return null;
+  }
+}
+
+async function cachePreviews(
+  env: Env,
+  key: string,
+  videos: Video[],
+): Promise<void> {
+  try {
+    await env.READ_CACHE?.put(key, JSON.stringify(videos), {
+      expirationTtl: videos.length ? 3600 : 60,
+    });
+  } catch {
+    // Optional cache; a KV outage must not hide YouTube results.
+  }
+}
+
+/** Public API metadata without creating feed, watch-state or playlist rows. */
+export async function getPublicPreview(env: Env, id: string): Promise<Video> {
+  if (!VIDEO_ID.test(id))
+    throw new HttpError(
+      400,
+      "INVALID_VIDEO_ID",
+      "Identificador de vídeo inválido.",
+    );
+  const key = `youtube-preview:v1:${id}`;
+  const cached = await cachedPreviews(env, key);
+  if (cached?.[0]) return cached[0];
+  const response = await listVideos(credential(env), [id]);
+  if (!Array.isArray(response.items))
+    throw new ExternalError("invalid_response");
+  const video = publicPreview(
+    response.items.find((item) => item.id === id) || {},
+  );
+  if (!video)
+    throw new HttpError(
+      404,
+      "VIDEO_NOT_FOUND",
+      "Este vídeo no está disponible públicamente en YouTube.",
+    );
+  await cachePreviews(env, key, [video]);
+  return video;
+}
+
 export async function getPublicVideo(
   env: Env,
   accountId: string,
@@ -177,6 +283,7 @@ export async function getPublicVideo(
     const ids = await storeVideos(
       env,
       response.items.filter((item) => item.id === id),
+      true,
     );
     if (!ids.length)
       throw new HttpError(
@@ -229,75 +336,51 @@ export async function getPublicSuggestions(
 ): Promise<Video[]> {
   const video =
     (await getVideo(env.DB, accountId, videoId, "external")) ??
-    (await getPublicVideo(env, accountId, videoId));
-  let shared = !!(await env.DB.prepare(
-    "SELECT 1 AS verified FROM public_read_cache WHERE cache_key=? AND expires_at>?",
-  )
-    .bind("public-video:" + videoId, nowIso())
-    .first());
-  const cacheKey = (isPublic: boolean) =>
-    `search:v4:${isPublic ? videoId : accountId + ":" + videoId}`;
-  let key = cacheKey(shared);
-  let ids = await cachedIds(env, key);
-  if (!ids) {
-    // Tags are fetched only on demand and never persisted from an OAuth/private response.
-    const source = await listVideos(credential(env), [videoId]);
-    if (!Array.isArray(source.items))
-      throw new ExternalError("invalid_response");
-    const publicSource = source.items.find(
-      (item) =>
-        item.id === videoId &&
-        item.status?.privacyStatus === "public" &&
-        item.snippet?.title,
-    );
-    shared =
-      !!publicSource &&
-      (await storeVideos(env, [publicSource])).includes(videoId);
-    const nextKey = cacheKey(shared);
-    if (nextKey !== key) {
-      key = nextKey;
-      ids = await cachedIds(env, key);
-    }
-    if (!ids) {
-      const queries = relatedQueries(
-        publicSource?.snippet?.title
-          ? { ...publicSource.snippet, title: publicSource.snippet.title }
-          : video,
-      );
-      let candidates: string[] = [];
-      for (const query of queries) {
-        const results = await searchVideos(credential(env), query);
-        if (!Array.isArray(results.items))
-          throw new ExternalError("invalid_response");
-        candidates = [
-          ...new Set(
-            results.items
-              .map((item) => item.id?.videoId)
-              .filter(
-                (id): id is string =>
-                  typeof id === "string" && VIDEO_ID.test(id) && id !== videoId,
-              ),
-          ),
-        ].slice(0, env.SYNC_PROFILE === "free" ? 4 : 8);
-        if (candidates.length) break;
-      }
-      if (candidates.length) {
-        const details = await listVideos(credential(env), candidates);
-        if (!Array.isArray(details.items))
-          throw new ExternalError("invalid_response");
-        ids = await storeVideos(
-          env,
-          details.items.filter((item) => candidates.includes(item.id || "")),
-        );
-      } else ids = [];
-      await cacheIds(env, key, ids, shared ? undefined : accountId);
-    }
-  }
-  const items = await Promise.all(
-    ids
-      .filter((id) => id !== videoId)
-      .slice(0, limit)
-      .map((id) => getVideo(env.DB, accountId, id, "external")),
+    (await getPublicPreview(env, videoId));
+  const cacheKey = `youtube-suggestions:v5:${videoId}`;
+  const cached = await cachedPreviews(env, cacheKey);
+  if (cached) return cached.slice(0, limit);
+  // Tags are used only on demand and are never persisted.
+  const source = await listVideos(credential(env), [videoId]);
+  if (!Array.isArray(source.items)) throw new ExternalError("invalid_response");
+  const publicSource = source.items.find(
+    (item) =>
+      item.id === videoId &&
+      item.status?.privacyStatus === "public" &&
+      item.snippet?.title,
   );
-  return items.filter((v): v is Video => v !== null);
+  const queries = relatedQueries(
+    publicSource?.snippet?.title
+      ? { ...publicSource.snippet, title: publicSource.snippet.title }
+      : video,
+  );
+  let suggestions: Video[] = [];
+  for (const query of queries) {
+    const results = await searchVideos(credential(env), query);
+    if (!Array.isArray(results.items))
+      throw new ExternalError("invalid_response");
+    const ids = [
+      ...new Set(
+        results.items
+          .map((item) => item.id?.videoId)
+          .filter(
+            (id): id is string =>
+              typeof id === "string" && VIDEO_ID.test(id) && id !== videoId,
+          ),
+      ),
+    ].slice(0, env.SYNC_PROFILE === "free" ? 4 : 8);
+    if (!ids.length) continue;
+    const details = await listVideos(credential(env), ids);
+    if (!Array.isArray(details.items))
+      throw new ExternalError("invalid_response");
+    const byId = new Map(
+      details.items.map((item) => [item.id, publicPreview(item)]),
+    );
+    suggestions = ids
+      .map((id) => byId.get(id))
+      .filter((v): v is Video => v != null);
+    if (suggestions.length) break;
+  }
+  if (publicSource) await cachePreviews(env, cacheKey, suggestions);
+  return suggestions.slice(0, limit);
 }

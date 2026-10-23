@@ -7,7 +7,6 @@ import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
 import { cachedFeed, invalidateReads, feedRevision } from "./read-cache";
 import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
-import { isRecentEnough } from "./rss";
 import {
   ExternalError,
   HttpError,
@@ -112,6 +111,7 @@ import {
 
 import {
   ensurePublicExamples,
+  getPublicPreview,
   getPublicVideo,
   getPublicSuggestions,
   storeVideos,
@@ -313,12 +313,7 @@ async function ensureVideoKnown(
   const account = requireAccount(ctx);
   const scope = videoScope(ctx);
   const existing = await getVideo(ctx.env.DB, account.id, videoId, scope);
-  if (
-    existing &&
-    (!refresh ||
-      (isWebSubEnabled(ctx.env) && !isRecentEnough(existing.publishedAt)))
-  )
-    return existing;
+  if (existing && !refresh) return existing;
   if (ctx.env.MODE !== "real") return null;
 
   requireConnectedAccount(account);
@@ -334,12 +329,7 @@ async function ensureVideoKnown(
   const snippet = item.snippet;
   const title = sanitizeText(snippet?.title, 500);
   const publishedAt = isoOrNull(snippet?.publishedAt);
-  if (
-    !title ||
-    !publishedAt ||
-    (isWebSubEnabled(ctx.env) && !isRecentEnough(publishedAt))
-  )
-    return null;
+  if (!title || !publishedAt) return null;
   const viewCountRaw = item.statistics?.viewCount;
   const video: ExternalVideo = {
     id: item.id,
@@ -369,7 +359,7 @@ async function ensureVideoKnown(
     ),
   );
   if (item.status?.privacyStatus === "public")
-    await storeVideos(ctx.env, [item]);
+    await storeVideos(ctx.env, [item], true);
   return getVideo(ctx.env.DB, account.id, videoId, scope);
 }
 
@@ -450,15 +440,9 @@ async function handlePatchSettings(ctx: RouteContext): Promise<Response> {
   }
 
   if (!changed) {
-    throw new HttpError(
-      400,
-      "VALIDATION_ERROR",
-      "Provide theme.",
-    );
+    throw new HttpError(400, "VALIDATION_ERROR", "Provide theme.");
   }
-  return json(
-    await savePreferences(ctx.env.DB, account.id, { theme }),
-  );
+  return json(await savePreferences(ctx.env.DB, account.id, { theme }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -528,9 +512,17 @@ async function handleVideo(ctx: RouteContext): Promise<Response> {
   if (ctx.env.MODE === "demo" && ctx.env.YOUTUBE_API_KEY)
     return json(await getPublicVideo(ctx.env, account.id, videoId));
   let video = await getVideo(ctx.env.DB, account.id, videoId, videoScope(ctx));
-  if (!video && ctx.env.MODE === "real" && account.connected)
-    video = await ensureVideoKnown(ctx, videoId, true);
-  if (ctx.env.MODE === "real" && account.connected) {
+  if (!video && ctx.env.MODE === "real" && account.connected) {
+    video = ctx.env.YOUTUBE_API_KEY
+      ? await getPublicPreview(ctx.env, videoId)
+      : await ensureVideoKnown(ctx, videoId, true);
+  }
+  if (
+    video &&
+    !video.transient &&
+    ctx.env.MODE === "real" &&
+    account.connected
+  ) {
     const details = await ctx.env.DB.prepare(
       "SELECT details_fetched_at FROM videos WHERE id = ?",
     )
@@ -775,14 +767,20 @@ async function handleChannels(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   const query = parseOptionalQuery(ctx.url, "q", 100);
   return json({
-    items: await listChannels(ctx.env.DB, account.id, query, videoScope(ctx), ctx.url.searchParams.get("excluded") === "true"),
+    items: await listChannels(
+      ctx.env.DB,
+      account.id,
+      query,
+      videoScope(ctx),
+      ctx.url.searchParams.get("excluded") === "true",
+    ),
   });
 }
 
 async function handleChannelExclusion(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   const channelId = routeParam(ctx, 0, "channelId");
-  if (!await getChannelRow(ctx.env.DB, channelId))
+  if (!(await getChannelRow(ctx.env.DB, channelId)))
     throw new HttpError(404, "CHANNEL_NOT_FOUND", "Canal no encontrado.");
   const body = await readJsonObject(ctx.request);
   const excluded = requiredBoolean(body, "excluded");
@@ -943,7 +941,12 @@ async function handleUnsubscribe(ctx: RouteContext): Promise<Response> {
 async function handleListPlaylists(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   return json({
-    items: await listPlaylists(ctx.env.DB, account.id, videoScope(ctx), ctx.url.searchParams.get("excluded") === "true"),
+    items: await listPlaylists(
+      ctx.env.DB,
+      account.id,
+      videoScope(ctx),
+      ctx.url.searchParams.get("excluded") === "true",
+    ),
   });
 }
 
@@ -952,7 +955,9 @@ async function handlePlaylistExclusion(ctx: RouteContext): Promise<Response> {
   const playlistId = routeParam(ctx, 0, "playlistId");
   const body = await readJsonObject(ctx.request);
   const excluded = requiredBoolean(body, "excluded");
-  if (!await setPlaylistExcluded(ctx.env.DB, account.id, playlistId, excluded))
+  if (
+    !(await setPlaylistExcluded(ctx.env.DB, account.id, playlistId, excluded))
+  )
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Lista no encontrada.");
   return json({ playlistId, excluded });
 }
@@ -1055,7 +1060,11 @@ async function ownedRemotePlaylist(ctx: RouteContext) {
   if (!row)
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Lista no encontrada.");
   if (row.excluded)
-    throw new HttpError(409, "PLAYLIST_EXCLUDED", "Vuelve a incluir la lista antes de sincronizarla.");
+    throw new HttpError(
+      409,
+      "PLAYLIST_EXCLUDED",
+      "Vuelve a incluir la lista antes de sincronizarla.",
+    );
   if (row.source !== "youtube")
     throw new HttpError(
       400,
@@ -1528,7 +1537,11 @@ const ROUTES: Route[] = [
     handler: handleBulkWatch,
   },
   { method: "GET", pattern: /^\/api\/channels$/, handler: handleChannels },
-  { method: "PATCH", pattern: /^\/api\/channels\/([^/]+)\/exclusion$/, handler: handleChannelExclusion },
+  {
+    method: "PATCH",
+    pattern: /^\/api\/channels\/([^/]+)\/exclusion$/,
+    handler: handleChannelExclusion,
+  },
   {
     method: "GET",
     pattern: /^\/api\/channels\/([^/]+)\/videos$/,
@@ -1549,7 +1562,11 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/playlists$/,
     handler: handleListPlaylists,
   },
-  { method: "PATCH", pattern: /^\/api\/playlists\/([^/]+)\/exclusion$/, handler: handlePlaylistExclusion },
+  {
+    method: "PATCH",
+    pattern: /^\/api\/playlists\/([^/]+)\/exclusion$/,
+    handler: handlePlaylistExclusion,
+  },
   {
     method: "POST",
     pattern: /^\/api\/playlists$/,

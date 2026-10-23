@@ -1,7 +1,7 @@
 /** One Queue message advances one durable, bounded step. No credentials in messages/state. */
 import type { AccountRow, Env } from "./types";
 import { isWebSubEnabled } from "./websub";
-import { isRecentEnough, oldestVideoDate } from "./rss";
+import { oldestVideoDate } from "./rss";
 import {
   ExternalError,
   HttpError,
@@ -325,9 +325,7 @@ export async function queuedSyncStatus(
 async function subscriptionStep(env: Env, account: AccountRow, s: State) {
   const result = await syncSubscriptionStep(env, account);
   s.items += result.items;
-  if (!result.more)
-    s.phase =
-      s.requested === "subscriptions" ? "done" : "rss";
+  if (!result.more) s.phase = s.requested === "subscriptions" ? "done" : "rss";
 }
 async function rssStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
@@ -543,7 +541,9 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   if (s.playlist) {
     const stillIncluded = await env.DB.prepare(
       "SELECT 1 FROM playlists WHERE id=? AND account_id=? AND excluded=0",
-    ).bind(s.playlist.id, account.id).first();
+    )
+      .bind(s.playlist.id, account.id)
+      .first();
     if (!stillIncluded) {
       s.playlistCursor = s.playlist.id;
       delete s.playlist;
@@ -713,7 +713,9 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
   const rows = owned
     ? await env.DB.prepare(
         `SELECT pm.video_id AS id FROM account_video_metadata pm WHERE pm.account_id=? AND pm.video_id>?
- AND (?=0 OR json_extract(pm.metadata,'$.publishedAt')>=?)
+ AND (?=0 OR json_extract(pm.metadata,'$.publishedAt')>=?
+   OR EXISTS(SELECT 1 FROM playlist_items pi JOIN playlists p ON p.id=pi.playlist_id
+     WHERE pi.video_id=pm.video_id AND p.account_id=pm.account_id))
  AND (?=''  OR EXISTS(SELECT 1 FROM playlist_items scoped WHERE scoped.playlist_id=? AND scoped.video_id=pm.video_id))
  AND (pm.expires_at<=? OR pm.details_fetched_at<=? OR json_extract(pm.metadata,'$._detailsExpired')=1
  OR (json_extract(pm.metadata,'$.publishedAt')>=? AND pm.details_fetched_at<=?)
@@ -829,7 +831,8 @@ async function step(env: Env, account: AccountRow, s: State) {
   // Cut over persisted jobs too: enabled discovery is global, never per account.
   if (
     isWebSubEnabled(env) &&
-    s.requested !== "playlists" && s.requested !== "rss" &&
+    s.requested !== "playlists" &&
+    s.requested !== "rss" &&
     s.phase !== "subscriptions"
   ) {
     s.phase = "done";

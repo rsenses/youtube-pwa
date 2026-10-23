@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
-import type { Env, AccountRow } from "../worker/types";
+import type { Env, AccountRow, Video } from "../worker/types";
 import { encryptToken } from "../worker/auth";
 import worker from "../worker/index";
 import { privateVideoStatements } from "../worker/private-metadata";
@@ -12,7 +12,9 @@ import {
   listChannels,
   listPlaylists,
   bulkWatchState,
+  createPlaylist,
   getVideo,
+  insertSession,
   setManualWatchState,
   setProgress,
   setChannelExcluded,
@@ -21,6 +23,7 @@ import {
   upsertRemoteSubscription,
 } from "../worker/db";
 import { readLimitedText } from "../worker/http";
+import { SESSION_COOKIE } from "../worker/http";
 import { writeRssCheck } from "../worker/rss-cache";
 import { getPublicVideo, getPublicSuggestions } from "../worker/public-youtube";
 import { listCommentThreads, listCommentReplies } from "../worker/youtube";
@@ -353,7 +356,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       )?.count,
     ).toBe(1);
   });
-  it("loads real related-search videos across channels with shared public cache and private watch states", async () => {
+  it("returns old cross-channel suggestions without saving candidates to D1 and caches public previews in KV", async () => {
     const channelId = "UC" + "a".repeat(22);
     const relatedId = "abcDEF12345";
     const calls: string[] = [];
@@ -376,6 +379,14 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       status: { privacyStatus: "public" },
     });
     env.YOUTUBE_API_KEY = "unit-test-key-only";
+    env.WEBSUB_ENABLED = "true";
+    const kv = new Map<string, string>();
+    env.READ_CACHE = {
+      get: async (key: string) => kv.get(key) ?? null,
+      put: async (key: string, value: string) => {
+        kv.set(key, value);
+      },
+    } as unknown as KVNamespace;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string, init: RequestInit) => {
@@ -417,33 +428,30 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const suggestions = await getPublicSuggestions(env, account.id, video.id);
       expect(suggestions.map((v) => v.id)).toEqual([relatedId]);
       expect(suggestions[0].channelTitle).toBe("Another channel");
+      expect(suggestions[0].transient).toBe(true);
+      expect(
+        await env.DB.prepare("SELECT id FROM videos WHERE id=?")
+          .bind(relatedId)
+          .first(),
+      ).toBeNull();
+      expect(
+        await env.DB.prepare(
+          "SELECT cache_key FROM public_read_cache WHERE cache_key LIKE 'search:%'",
+        ).first(),
+      ).toBeNull();
       const count = calls.length;
       await getPublicVideo(env, account.id, video.id);
       await getPublicSuggestions(env, account.id, video.id);
       expect(calls).toHaveLength(count);
       expect(calls.filter((path) => path.endsWith("/search"))).toHaveLength(1);
-      await env.DB.prepare(
-        "INSERT INTO accounts (id,mode,connected,created_at,updated_at) VALUES ('search-partner','real',1,?,?)",
-      )
-        .bind(oldDate, oldDate)
-        .run();
-      await setManualWatchState(env.DB, "search-partner", relatedId, true);
-      const partnerSuggestions = await getPublicSuggestions(
-        env,
-        "search-partner",
-        video.id,
-      );
-      expect(partnerSuggestions[0].watched).toBe(true);
-      expect(
-        (await getPublicSuggestions(env, account.id, video.id))[0].watched,
-      ).toBe(false);
-      expect(calls).toHaveLength(count);
     } finally {
       vi.unstubAllGlobals();
       delete env.YOUTUBE_API_KEY;
+      delete env.WEBSUB_ENABLED;
+      delete env.READ_CACHE;
     }
   });
-  it("falls back when tag searches have no candidates and keeps private query caches per owner", async () => {
+  it("uses each private title independently and falls back when public tag search is empty", async () => {
     const privateId = "prvRelated1",
       publicId = "related0001",
       titleQueries: string[] = [];
@@ -492,6 +500,13 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       contentDetails: { duration: "PT5M" },
     });
     env.YOUTUBE_API_KEY = "fixture-key";
+    const kv = new Map<string, string>();
+    env.READ_CACHE = {
+      get: async (key: string) => kv.get(key) ?? null,
+      put: async (key: string, value: string) => {
+        kv.set(key, value);
+      },
+    } as unknown as KVNamespace;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string) => {
@@ -521,33 +536,12 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       await getPublicSuggestions(env, account.id, privateId);
       await getPublicSuggestions(env, "related-private-b", privateId);
       await getPublicSuggestions(env, account.id, privateId);
-      expect(titleQueries).toEqual(["React hooks", "Rust memoria"]);
-      const keys = await env.DB.prepare(
-        "SELECT cache_key FROM public_read_cache WHERE cache_key LIKE 'search:v4:%:prvRelated1'",
-      ).all<{ cache_key: string }>();
-      expect(keys.results?.map((r) => r.cache_key).sort()).toEqual(
-        [
-          `search:v4:${account.id}:${privateId}`,
-          `search:v4:related-private-b:${privateId}`,
-        ].sort(),
-      );
-      await env.DB.prepare("DELETE FROM public_read_cache WHERE cache_key=?")
-        .bind(`search:v4:${account.id}:${privateId}`)
-        .run();
-      await env.DB.prepare("UPDATE accounts SET connected=0 WHERE id=?")
-        .bind(account.id)
-        .run();
-      await getPublicSuggestions(env, account.id, privateId);
-      expect(
-        await env.DB.prepare(
-          "SELECT cache_key FROM public_read_cache WHERE cache_key=?",
-        )
-          .bind(`search:v4:${account.id}:${privateId}`)
-          .first(),
-      ).toBeNull();
-      await env.DB.prepare("UPDATE accounts SET connected=1 WHERE id=?")
-        .bind(account.id)
-        .run();
+      expect(titleQueries).toEqual([
+        "React hooks",
+        "Rust memoria",
+        "React hooks",
+      ]);
+      expect([...kv.keys()].some((key) => key.includes(privateId))).toBe(false);
       await getPublicSuggestions(env, account.id, publicId);
       expect(titleQueries.slice(-2)).toEqual([
         "frameworkcode ecosystem",
@@ -556,9 +550,92 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const count = titleQueries.length;
       await getPublicSuggestions(env, account.id, publicId);
       expect(titleQueries).toHaveLength(count);
+      expect(
+        await env.DB.prepare(
+          "SELECT cache_key FROM public_read_cache WHERE cache_key LIKE 'search:%'",
+        ).first(),
+      ).toBeNull();
     } finally {
       vi.unstubAllGlobals();
       delete env.YOUTUBE_API_KEY;
+      delete env.READ_CACHE;
+    }
+  });
+  it("previews an old public video without persistence and saves it only after a playlist action", async () => {
+    const id = "OldVideo001";
+    const channelId = "UC" + "o".repeat(22);
+    const item = {
+      id,
+      snippet: {
+        channelId,
+        channelTitle: "Archive",
+        title: "Old public video",
+        description: "",
+        publishedAt: "2020-01-01T00:00:00Z",
+        liveBroadcastContent: "none",
+      },
+      status: { privacyStatus: "public", embeddable: true },
+      contentDetails: { duration: "PT5M" },
+    };
+    env.YOUTUBE_API_KEY = "fixture-key";
+    env.WEBSUB_ENABLED = "true";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const url = new URL(input);
+        if (url.pathname.endsWith("/videos"))
+          return Response.json({ items: [item] });
+        throw new Error("Unexpected mocked endpoint");
+      }),
+    );
+    const { token, session } = await insertSession(env.DB, account.id);
+    const cookie = `${SESSION_COOKIE}=${token}`;
+    const playlistId = await createPlaylist(env.DB, {
+      accountId: account.id,
+      title: "Archive",
+      description: "",
+      source: "local",
+    });
+    try {
+      const preview = await worker.fetch(
+        new Request(`${env.APP_ORIGIN}/api/videos/${id}`, {
+          headers: { cookie },
+        }),
+        env,
+      );
+      expect(preview.status).toBe(200);
+      expect(((await preview.json()) as Video).transient).toBe(true);
+      expect(
+        await env.DB.prepare("SELECT id FROM videos WHERE id=?")
+          .bind(id)
+          .first(),
+      ).toBeNull();
+      const saved = await worker.fetch(
+        new Request(`${env.APP_ORIGIN}/api/playlists/${playlistId}/items`, {
+          method: "POST",
+          headers: {
+            cookie,
+            origin: env.APP_ORIGIN,
+            "content-type": "application/json",
+            "x-csrf-token": session.csrf_token,
+          },
+          body: JSON.stringify({ videoId: id }),
+        }),
+        env,
+      );
+      expect(saved.status).toBe(201);
+      expect(((await saved.json()) as Video).id).toBe(id);
+      expect(
+        await env.DB.prepare(
+          "SELECT id FROM playlist_items WHERE playlist_id=? AND video_id=?",
+        )
+          .bind(playlistId, id)
+          .first(),
+      ).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      delete env.YOUTUBE_API_KEY;
+      delete env.WEBSUB_ENABLED;
     }
   });
   it("supports paginated public comment and reply reads without OAuth", async () => {
@@ -966,6 +1043,57 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       });
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+  it("imports an old video from a YouTube playlist with WebSub enabled", async () => {
+    const ownerId = "old-playlist-owner";
+    const id = "oldList0001";
+    await env.DB.prepare(
+      "INSERT INTO accounts(id,mode,connected,created_at,updated_at) VALUES (?,'real',1,?,?)",
+    ).bind(ownerId, oldDate, oldDate).run();
+    await env.DB.prepare(
+      "INSERT INTO oauth_tokens(account_id,access_token_enc,expires_at,updated_at) VALUES (?,?,?,?)",
+    ).bind(ownerId, await encryptToken(env.TOKEN_ENCRYPTION_KEY!, "old-list-token"),
+      future, oldDate).run();
+    const owner = (await env.DB.prepare("SELECT * FROM accounts WHERE id=?")
+      .bind(ownerId).first<AccountRow>())!;
+    env.WEBSUB_ENABLED = "true";
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname.endsWith("/playlists")) return Response.json({
+        items: [{
+          id: "PLoldlist",
+          snippet: { title: "Old list" },
+          contentDetails: { itemCount: 1 },
+          status: { privacyStatus: "private" },
+        }],
+      });
+      if (url.pathname.endsWith("/playlistItems")) return Response.json({
+        items: [{
+          id: "old-remote-item",
+          snippet: {
+            title: "Old saved video",
+            publishedAt: "2020-01-01T00:00:00Z",
+            position: 0,
+            resourceId: { videoId: id },
+            videoOwnerChannelId: "UC" + "o".repeat(22),
+          },
+          contentDetails: { videoId: id, videoPublishedAt: "2020-01-01T00:00:00Z" },
+        }],
+      });
+      throw new Error("Unexpected mocked endpoint");
+    }));
+    try {
+      const result = await handleSync(env, owner, "playlists");
+      expect(result.status).toBe("success");
+      expect(await env.DB.prepare(
+        "SELECT id FROM playlist_items WHERE video_id=?",
+      ).bind(id).first()).not.toBeNull();
+      expect((await getVideo(env.DB, ownerId, id, "external"))?.title)
+        .toBe("Old saved video");
+    } finally {
+      vi.unstubAllGlobals();
+      delete env.WEBSUB_ENABLED;
     }
   });
   it("bounds Free RSS to one channel, resumes its cursor and preserves imported snapshots", async () => {
@@ -1405,31 +1533,86 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     const now = new Date().toISOString();
     const channelId = "UCexcluded-history";
     const videoId = "excluded001";
-    await upsertExternalChannel(env.DB, { id: channelId, title: "Excluded", description: "", thumbnailUrl: null }, future);
+    await upsertExternalChannel(
+      env.DB,
+      { id: channelId, title: "Excluded", description: "", thumbnailUrl: null },
+      future,
+    );
     await upsertRemoteSubscription(env.DB, account.id, channelId, null);
-    await externalVideoStatement(env.DB, {
-      id: videoId, channelId, channelTitle: "Excluded", title: "History", description: "",
-      thumbnailUrl: "", publishedAt: now, durationSeconds: null, viewCount: null, source: "rss",
-    }, future).run();
-    const feed = () => listFeed(env.DB, account.id, { status: "all", channelId: null, cursor: null, limit: 20 }, "external");
+    await externalVideoStatement(
+      env.DB,
+      {
+        id: videoId,
+        channelId,
+        channelTitle: "Excluded",
+        title: "History",
+        description: "",
+        thumbnailUrl: "",
+        publishedAt: now,
+        durationSeconds: null,
+        viewCount: null,
+        source: "rss",
+      },
+      future,
+    ).run();
+    const feed = () =>
+      listFeed(
+        env.DB,
+        account.id,
+        { status: "all", channelId: null, cursor: null, limit: 20 },
+        "external",
+      );
     expect((await feed()).items.some((item) => item.id === videoId)).toBe(true);
-    await setProgress(env.DB, account.id, videoId, { positionSeconds: 100, durationSeconds: 100, percent: 100 });
-    expect((await getVideo(env.DB, account.id, videoId, "external"))?.watched).toBe(false);
+    await setProgress(env.DB, account.id, videoId, {
+      positionSeconds: 100,
+      durationSeconds: 100,
+      percent: 100,
+    });
+    expect(
+      (await getVideo(env.DB, account.id, videoId, "external"))?.watched,
+    ).toBe(false);
     await setManualWatchState(env.DB, account.id, videoId, true);
-    await setProgress(env.DB, account.id, videoId, { positionSeconds: 0, durationSeconds: 100, percent: 0 });
-    expect((await getVideo(env.DB, account.id, videoId, "external"))?.watched).toBe(true);
+    await setProgress(env.DB, account.id, videoId, {
+      positionSeconds: 0,
+      durationSeconds: 100,
+      percent: 0,
+    });
+    expect(
+      (await getVideo(env.DB, account.id, videoId, "external"))?.watched,
+    ).toBe(true);
     await setChannelExcluded(env.DB, account.id, channelId, true);
-    expect((await feed()).items.some((item) => item.id === videoId)).toBe(false);
-    expect((await listChannels(env.DB, account.id, null, "external", true)).some((item) => item.id === channelId)).toBe(true);
+    expect((await feed()).items.some((item) => item.id === videoId)).toBe(
+      false,
+    );
+    expect(
+      (await listChannels(env.DB, account.id, null, "external", true)).some(
+        (item) => item.id === channelId,
+      ),
+    ).toBe(true);
     await setChannelExcluded(env.DB, account.id, channelId, false);
     expect((await feed()).items.some((item) => item.id === videoId)).toBe(true);
     const playlistId = "excluded-list-1";
-    await env.DB.prepare("INSERT INTO playlists(id,account_id,source,title,created_at,updated_at) VALUES (?,?,'local','History',?,?)")
-      .bind(playlistId, account.id, now, now).run();
+    await env.DB.prepare(
+      "INSERT INTO playlists(id,account_id,source,title,created_at,updated_at) VALUES (?,?,'local','History',?,?)",
+    )
+      .bind(playlistId, account.id, now, now)
+      .run();
     await setPlaylistExcluded(env.DB, account.id, playlistId, true);
-    expect((await listPlaylists(env.DB, account.id, "external")).some((item) => item.id === playlistId)).toBe(false);
-    expect((await listPlaylists(env.DB, account.id, "external", true)).some((item) => item.id === playlistId)).toBe(true);
+    expect(
+      (await listPlaylists(env.DB, account.id, "external")).some(
+        (item) => item.id === playlistId,
+      ),
+    ).toBe(false);
+    expect(
+      (await listPlaylists(env.DB, account.id, "external", true)).some(
+        (item) => item.id === playlistId,
+      ),
+    ).toBe(true);
     await setPlaylistExcluded(env.DB, account.id, playlistId, false);
-    expect((await listPlaylists(env.DB, account.id, "external")).some((item) => item.id === playlistId)).toBe(true);
+    expect(
+      (await listPlaylists(env.DB, account.id, "external")).some(
+        (item) => item.id === playlistId,
+      ),
+    ).toBe(true);
   });
 });
