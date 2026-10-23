@@ -366,15 +366,6 @@ export async function handleSync(
   if (env.MODE === "demo") return recordNoop(env, account, type);
   if (isWebSubEnabled(env)) {
     requireConnectedAccount(account);
-    if (type === "rss")
-      return {
-        type,
-        mode: "real",
-        status: "noop",
-        items: 0,
-        message:
-          "Las novedades llegan automáticamente; RSS se reconcilia una vez al día por canal.",
-      };
     if (type === "all") type = "subscriptions";
   }
   if (env.SYNC_QUEUE) return startQueuedSync(env, account, type);
@@ -441,7 +432,7 @@ async function runType(
   type: SyncType,
 ): Promise<SyncOutcome> {
   if (type === "subscriptions") return syncSubscriptions(env, account);
-  if (type === "rss") return syncRss(env, account);
+  if (type === "rss") return syncRss(env, account, isWebSubEnabled(env));
   if (type === "playlists") return syncPlaylists(env, account);
   throw new HttpError(400, "VALIDATION_ERROR", "Invalid sync type.");
 }
@@ -682,13 +673,15 @@ async function loadRssChannels(
   accountId: string,
   cursor: string | null,
   now: string,
+  force = false,
 ): Promise<RssChannelRow[]> {
   const conditions = [
     "s.account_id = ?",
     "s.active = 1",
-    "(c.rss_next_attempt_at IS NULL OR c.rss_next_attempt_at <= ?)",
+    "s.excluded = 0",
+    ...(force ? [] : ["(c.rss_next_attempt_at IS NULL OR c.rss_next_attempt_at <= ?)"]),
   ];
-  const params: Array<string | number> = [accountId, now];
+  const params: Array<string | number> = force ? [accountId] : [accountId, now];
   if (cursor) {
     conditions.push("c.id > ?");
     params.push(cursor);
@@ -845,7 +838,7 @@ async function fetchAndStoreFeed(
   return { items: videos.length, skipped };
 }
 
-async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
+async function syncRss(env: Env, account: AccountRow, force = false): Promise<SyncOutcome> {
   requireConnectedAccount(account);
   const now = nowIso();
   const state = await env.DB.prepare(
@@ -854,10 +847,10 @@ async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
     .bind(account.id)
     .first<{ cursor: string | null }>();
   let cursor = typeof state?.cursor === "string" ? state.cursor : null;
-  let rows = await loadRssChannels(env, account.id, cursor, now);
+  let rows = await loadRssChannels(env, account.id, cursor, now, force);
   if (cursor && rows.length === 0) {
     cursor = null;
-    rows = await loadRssChannels(env, account.id, null, now);
+    rows = await loadRssChannels(env, account.id, null, now, force);
   }
 
   const startedAt = Date.now();
@@ -902,7 +895,7 @@ async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
     );
     cursor = rows[rows.length - 1].id;
     await saveRssCursor(env, account.id, cursor);
-    rows = await loadRssChannels(env, account.id, cursor, now);
+    rows = await loadRssChannels(env, account.id, cursor, now, force);
     if (rows.length === 0) {
       cursor = null;
       await saveRssCursor(env, account.id, null);
@@ -915,7 +908,7 @@ async function syncRss(env: Env, account: AccountRow): Promise<SyncOutcome> {
   const pendingRow = await env.DB.prepare(
     `SELECT COUNT(*) AS pending
     FROM subscriptions s JOIN channels c ON c.id = s.channel_id
-    WHERE s.account_id = ? AND s.active = 1
+    WHERE s.account_id = ? AND s.active = 1 AND s.excluded = 0
       AND (c.rss_next_attempt_at > ? OR (? IS NOT NULL AND c.id > ?))`,
   )
     .bind(account.id, now, cursor, cursor)

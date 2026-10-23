@@ -52,6 +52,12 @@ const navigation = [
   ["/playlists", "lists", "Listas"],
   ["/settings", "settings", "Configuración"],
 ];
+function matchesSearch(query: string, ...values: string[]) {
+  const normalize = (value: string) =>
+    value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+  const needle = normalize(query.trim());
+  return !needle || values.some((value) => normalize(value).includes(needle));
+}
 const syncTypeLabels: Record<string, string> = {
   all: "Todo",
   subscriptions: "Suscripciones",
@@ -341,10 +347,7 @@ function summarizeSyncDetail(detail: string | null | undefined) {
 }
 function App() {
   const [session, sessionSet] = useState<SessionInfo | null>(null),
-    [settings, settingsSet] = useState<Settings>({
-      watchThreshold: 80,
-      theme: "system",
-    }),
+    [settings, settingsSet] = useState<Settings>({ theme: "system" }),
     [error, errorSet] = useState(""),
     [toast, toastSet] = useState("");
   const location = useLocation();
@@ -557,7 +560,7 @@ function PageHeading({
     </div>
   );
 }
-function SyncButton({ onDone }: { onDone?: (job?: SyncJob) => void } = {}) {
+function SyncButton({ onDone, type = "subscriptions", label = "Actualizar canales" }: { onDone?: (job?: SyncJob) => void; type?: "subscriptions" | "rss"; label?: string } = {}) {
   const { notify, session } = useApp();
   const mounted = useRef(false);
   useEffect(() => {
@@ -575,7 +578,7 @@ function SyncButton({ onDone }: { onDone?: (job?: SyncJob) => void } = {}) {
         setBusy(true);
         try {
           let result = await api<SyncSummary>("/api/sync", "POST", {
-            type: "all",
+            type,
           });
           const job = result.job;
           if (job) {
@@ -587,7 +590,7 @@ function SyncButton({ onDone }: { onDone?: (job?: SyncJob) => void } = {}) {
             let steps = 1;
             while (result.more && mounted.current && steps < 500) {
               result = await api<SyncSummary>("/api/sync", "POST", {
-                type: "all",
+                type,
               });
               steps++;
             }
@@ -632,7 +635,7 @@ function SyncButton({ onDone }: { onDone?: (job?: SyncJob) => void } = {}) {
       <span className={busy ? "spin" : ""}>
         <Icon name="sync" size={17} />
       </span>
-      {busy ? "Sincronizando…" : "Actualizar"}
+      {busy ? "Sincronizando…" : label}
     </button>
   );
 }
@@ -916,7 +919,7 @@ function Feed() {
         )}
         <div className="video-grid">
           {videos.map((v) => (
-            <VideoCard key={v.id} video={v} onChange={change} />
+            <VideoCard key={v.id} video={v} onChange={change} swipeToWatch />
           ))}
         </div>
         {busy && !videos.length && (
@@ -977,12 +980,14 @@ function Feed() {
 }
 function Channels() {
   const [q, setQ] = useState(""),
+    [excluded, setExcluded] = useState(false),
     [version, setVersion] = useState(0),
     [newId, setNewId] = useState("");
   const { data, error, loading } = useResource<{ items: Channel[] }>(
-    `/api/channels?q=${encodeURIComponent(q)}`,
+    `/api/channels?excluded=${excluded}`,
     version,
   );
+  const visibleChannels = data?.items.filter((c) => matchesSearch(q, c.title, c.description)) ?? [];
   const { notify, session } = useApp();
   async function toggle(c: Channel) {
     try {
@@ -996,6 +1001,13 @@ function Channels() {
     } catch (e) {
       notify((e as Error).message);
     }
+  }
+  async function setExclusion(c: Channel) {
+    try {
+      await api(`/api/channels/${c.id}/exclusion`, "PATCH", { excluded: !c.excluded });
+      setVersion((v) => v + 1);
+      notify(c.excluded ? "Canal incluido" : "Canal excluido de la aplicación");
+    } catch (e) { notify((e as Error).message); }
   }
   return (
     <>
@@ -1012,10 +1024,14 @@ function Channels() {
           onChange={(e) => setQ(e.target.value)}
         />
       </div>
+      <div className="segmented exclusion-filter" aria-label="Filtrar canales">
+        <button className={!excluded ? "active" : ""} aria-pressed={!excluded} onClick={() => setExcluded(false)}>Canales</button>
+        <button className={excluded ? "active" : ""} aria-pressed={excluded} onClick={() => setExcluded(true)}>Excluidos</button>
+      </div>
       {loading && <State>Cargando canales…</State>}
       {error && <State error>{error}</State>}
       <div className="channels-grid">
-        {data?.items.map((c) => (
+        {visibleChannels.map((c) => (
           <article className="channel-card" key={c.id}>
             <Link
               to={`/channels/${c.id}`}
@@ -1036,22 +1052,28 @@ function Channels() {
                 <Link to={`/channels/${c.id}`}>{c.title}</Link>
               </h2>
               <p>{c.description || "Sin descripción."}</p>
-              <button
-                className={`button small ${c.subscribed ? "secondary" : ""}`}
-                onClick={() => toggle(c)}
-              >
-                <Icon name={c.subscribed ? "check" : "plus"} size={16} />
-                {c.subscribed ? "Siguiendo" : "Seguir"}
-              </button>
+              <div className="channel-actions">
+                <button
+                  className={`button small ${c.subscribed ? "secondary" : ""}`}
+                  onClick={() => toggle(c)}
+                >
+                  <Icon name={c.subscribed ? "check" : "plus"} size={16} />
+                  {c.subscribed ? "Siguiendo" : "Seguir"}
+                </button>
+                <button className="button small secondary" onClick={() => setExclusion(c)}>
+                  {!c.excluded && <Icon name="close" size={16} />}
+                  {c.excluded ? "Volver a incluir" : "Excluir de la aplicación"}
+                </button>
+              </div>
             </div>
           </article>
         ))}
       </div>
-      {data && !data.items.length && (
+      {data && !visibleChannels.length && (
         <State>
           {q
             ? "No hay canales que coincidan con la búsqueda."
-            : "Aún no hay canales suscritos."}
+            : excluded ? "No hay canales excluidos." : "Aún no hay canales suscritos."}
         </State>
       )}
       {session.mode === "real" && (
@@ -1220,13 +1242,23 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
   );
 }
 function Playlists() {
-  const { session } = useApp();
+  const { session, notify } = useApp();
   const [version, setVersion] = useState(0),
-    [open, setOpen] = useState(false);
+    [open, setOpen] = useState(false),
+    [excluded, setExcluded] = useState(false),
+    [q, setQ] = useState("");
   const { data, error, loading } = useResource<{ items: PlaylistSummary[] }>(
-    "/api/playlists",
+    `/api/playlists?excluded=${excluded}`,
     version,
   );
+  const visiblePlaylists = data?.items.filter((p) => matchesSearch(q, p.title, p.description)) ?? [];
+  async function setExclusion(p: PlaylistSummary) {
+    try {
+      await api(`/api/playlists/${p.id}/exclusion`, "PATCH", { excluded: !p.excluded });
+      setVersion((v) => v + 1);
+      notify(p.excluded ? "Lista incluida" : "Lista excluida de la aplicación");
+    } catch (e) { notify((e as Error).message); }
+  }
   return (
     <>
       <PageHeading
@@ -1238,9 +1270,19 @@ function Playlists() {
           </button>
         }
       />
-      {session.mode === "real" && session.connected && (
-        <RemoteListSync onDone={() => setVersion((v) => v + 1)} />
-      )}
+      <div className="search-input">
+        <Icon name="search" size={20} />
+        <input
+          aria-label="Buscar listas"
+          placeholder="Buscar listas"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+      <div className="segmented exclusion-filter" aria-label="Filtrar listas">
+        <button className={!excluded ? "active" : ""} aria-pressed={!excluded} onClick={() => setExcluded(false)}>Listas</button>
+        <button className={excluded ? "active" : ""} aria-pressed={excluded} onClick={() => setExcluded(true)}>Excluidos</button>
+      </div>
       {open && (
         <PlaylistForm
           onDone={() => {
@@ -1252,25 +1294,36 @@ function Playlists() {
       {loading && <State>Cargando listas…</State>}
       {error && <State error>{error}</State>}
       <div className="playlist-grid">
-        {data?.items.map((p) => (
-          <Link className="playlist-card" key={p.id} to={`/playlists/${p.id}`}>
-            <span className="playlist-icon">
-              <Icon name={p.source === "local" ? "lists" : "save"} size={22} />
-            </span>
-            <div className="playlist-card-copy">
-              <h2>{p.title}</h2>
-              <p>{p.description || "Sin descripción."}</p>
-              <span className="playlist-meta">
-                {p.itemCount} vídeos ·{" "}
-                {p.source === "local" ? "Local" : "YouTube"}
+        {visiblePlaylists.map((p) => (
+          <article className="playlist-card" key={p.id}>
+            <Link className="playlist-card-link" to={`/playlists/${p.id}`}>
+              <span className="playlist-icon">
+                <Icon name={p.source === "local" ? "lists" : "save"} size={22} />
               </span>
+              <div className="playlist-card-copy">
+                <h2>{p.title}</h2>
+                <p>{p.description || "Sin descripción."}</p>
+                <span className="playlist-meta">
+                  {p.itemCount} vídeos ·{" "}
+                  {p.source === "local" ? "Local" : "YouTube"}
+                </span>
+              </div>
+              <Icon name="chevron" size={18} />
+            </Link>
+            <div className="playlist-card-actions">
+              <button className="button small secondary" onClick={() => setExclusion(p)}>
+                {!p.excluded && <Icon name="close" size={16} />}
+                {p.excluded ? "Volver a incluir" : "Excluir de la aplicación"}
+              </button>
             </div>
-            <Icon name="chevron" size={18} />
-          </Link>
+          </article>
         ))}
       </div>
-      {data && !data.items.length && (
-        <State>Crea tu primera lista o actualiza el catálogo de YouTube.</State>
+      {data && !visiblePlaylists.length && (
+        <State>{q ? "No hay listas que coincidan con la búsqueda." : excluded ? "No hay listas excluidas." : "Crea tu primera lista o actualiza el catálogo de YouTube."}</State>
+      )}
+      {session.mode === "real" && session.connected && !excluded && (
+        <div className="catalog-sync"><RemoteListSync onDone={() => setVersion((v) => v + 1)} /></div>
       )}
     </>
   );
@@ -1554,11 +1607,6 @@ function Watch({ id }: { id: string }) {
   return (
     <div className="watch-layout">
       <div className="watch-primary">
-        <div className="watch-back">
-          <Link className="back-link" to="/feed">
-            <Icon name="back" size={18} /> Feed
-          </Link>
-        </div>
         <Player
           video={video}
           onProgress={change}
@@ -1640,14 +1688,6 @@ function Watch({ id }: { id: string }) {
             </summary>
             <p>{video.description || "No hay descripción disponible."}</p>
           </details>
-          <div className="watch-state-note">
-            <span className="status-dot" />
-            {video.watched
-              ? "Visto en Alveo"
-              : video.positionSeconds > 0
-                ? `${Math.round(video.percent)} % guardado en Alveo`
-                : "Pendiente"}
-          </div>
           <section className="comments-section">
             <div className="section-title">
               <h2>Comentarios</h2>
@@ -1925,12 +1965,11 @@ function useSyncStatus(endpoint = "/api/sync/status") {
 function SettingsPage() {
   const { session, settings, updateSettings, notify, refreshSession } =
     useApp();
-  const { data: syncStatus, error: syncError } = useSyncStatus();
+  const { data: syncStatus, error: syncError, refresh: refreshSyncStatus } = useSyncStatus();
   const currentJob =
     syncStatus?.jobs?.find(isActiveSyncJob) || syncStatus?.jobs?.[0];
   const [consent, setConsent] = useState(false);
-  const [threshold, setThreshold] = useState(settings.watchThreshold),
-    [confirm, setConfirm] = useState("");
+  const [confirm, setConfirm] = useState("");
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const privacyOpen = location.hash === "#privacy";
@@ -2023,42 +2062,6 @@ function SettingsPage() {
           )}
         </section>
         <section className="settings-card">
-          <h2>Marcar como visto</h2>
-          <p>Marca el vídeo automáticamente al alcanzar este porcentaje.</p>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                await updateSettings({
-                  watchThreshold: threshold,
-                });
-              } catch (e) {
-                notify((e as Error).message);
-              }
-            }}
-          >
-            <div className="threshold-value">
-              {threshold}
-              <span>%</span>
-            </div>
-            <label>
-              <span className="sr-only">Umbral de visto</span>
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={threshold}
-                onChange={(e) => setThreshold(Number(e.target.value))}
-              />
-            </label>
-            <button className="button small secondary">Guardar umbral</button>
-          </form>
-          <p className="muted-note">
-            El marcado manual tiene prioridad. Directos y duración desconocida:
-            marcado manual.
-          </p>
-        </section>
-        <section className="settings-card">
           <h2>Apariencia</h2>
           <div className="theme-options">
             {[
@@ -2088,8 +2091,13 @@ function SettingsPage() {
               ? session.capabilities.publicData
                 ? "Actualiza datos públicos. No importa tu cuenta."
                 : "Sin conexión externa en esta demo."
-              : "Importa cambios de YouTube y descubre vídeos nuevos."}
+              : "Actualiza suscripciones y permite recuperar publicaciones por RSS."}
           </p>
+          {session.mode === "real" && session.connected && (
+            <div className="settings-buttons">
+              <SyncButton type="rss" label="Reconciliar vídeos por RSS" onDone={() => refreshSyncStatus()} />
+            </div>
+          )}
           {currentJob && (
             <div className="sync-run" data-testid="sync-job">
               <div className="sync-run-head">

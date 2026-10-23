@@ -68,14 +68,14 @@ describe("Atom feed parsing", () => {
     expect(first.description).toContain("Line two with <tag> and & entity");
     expect(first.description.split("\n")).toHaveLength(2);
     expect(first.thumbnailUrl).toBe(
-      "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg",
+      "https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg",
     );
     expect(first.viewCount).toBe(12345);
     expect(first.durationSeconds).toBeNull();
 
     expect(second.videoId).toBe("lmnopqrstuv");
-    // Thumbnails from arbitrary hosts are rejected rather than stored.
-    expect(second.thumbnailUrl).toBe("");
+    // The video id determines the thumbnail even when Atom supplies another host.
+    expect(second.thumbnailUrl).toBe("https://i.ytimg.com/vi/lmnopqrstuv/mqdefault.jpg");
     expect(second.viewCount).toBeNull();
   });
 

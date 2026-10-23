@@ -55,7 +55,9 @@ import {
   nextPlaylistPosition,
   purgeExpiredMetadata,
   savePreferences,
+  setChannelExcluded,
   setManualWatchState,
+  setPlaylistExcluded,
   setProgress,
   subscribeLocal,
   unsubscribeRow,
@@ -283,23 +285,6 @@ function mapCommentReply(item: YouTubeCommentItem): CommentItem | null {
   };
 }
 
-function requiredInteger(
-  body: Record<string, unknown>,
-  key: string,
-  min: number,
-  max: number,
-): number {
-  const value = optionalFiniteNumber(body, key, { min, max });
-  if (value === undefined || !Number.isInteger(value)) {
-    throw new HttpError(
-      400,
-      "VALIDATION_ERROR",
-      `Field "${key}" must be an integer.`,
-    );
-  }
-  return value;
-}
-
 function errorFromComments(error: unknown): never {
   if (error instanceof ExternalError) {
     if (error.reason === "commentsdisabled") {
@@ -447,19 +432,6 @@ async function handlePatchSettings(ctx: RouteContext): Promise<Response> {
   const current = await getPreferences(ctx.env.DB, account.id);
   let changed = false;
 
-  let watchThreshold = current.watchThreshold;
-  if ("watchThreshold" in body) {
-    if (body.watchThreshold === null) {
-      throw new HttpError(
-        400,
-        "VALIDATION_ERROR",
-        "watchThreshold must be an integer.",
-      );
-    }
-    watchThreshold = requiredInteger(body, "watchThreshold", 1, 100);
-    changed = true;
-  }
-
   let theme = current.theme;
   if ("theme" in body) {
     if (body.theme === null) {
@@ -481,11 +453,11 @@ async function handlePatchSettings(ctx: RouteContext): Promise<Response> {
     throw new HttpError(
       400,
       "VALIDATION_ERROR",
-      "Provide watchThreshold or theme.",
+      "Provide theme.",
     );
   }
   return json(
-    await savePreferences(ctx.env.DB, account.id, { watchThreshold, theme }),
+    await savePreferences(ctx.env.DB, account.id, { theme }),
   );
 }
 
@@ -673,7 +645,6 @@ async function handleProgress(ctx: RouteContext): Promise<Response> {
       "revision must be an integer.",
     );
   }
-  const ended = optionalBoolean(body, "ended");
   const current = await getWatchSnapshot(ctx.env.DB, account.id, videoId);
   if (revision !== undefined && current && revision < current.revision) {
     return json({
@@ -700,15 +671,6 @@ async function handleProgress(ctx: RouteContext): Promise<Response> {
           ),
         )
       : (current?.percent ?? 0);
-  const settings = await getPreferences(ctx.env.DB, account.id);
-  const autoWatched =
-    video.isLive === false &&
-    Boolean(effectiveDuration && effectiveDuration > 0) &&
-    (ended === true || percent >= settings.watchThreshold);
-  const manual = current?.manual === 1;
-  const watched = manual
-    ? current?.watched === 1
-    : current?.watched === 1 || autoWatched;
   const now = new Date().toISOString();
 
   await setProgress(
@@ -722,13 +684,9 @@ async function handleProgress(ctx: RouteContext): Promise<Response> {
           ? (current?.durationSeconds ?? video.durationSeconds ?? null)
           : incomingDuration,
       percent,
-      watched,
-      watchedAt: watched ? now : null,
     },
     now,
   );
-  if (watched !== (current?.watched === 1))
-    await invalidateReads(ctx.env, account.id);
   const updated = await getVideo(
     ctx.env.DB,
     account.id,
@@ -817,8 +775,20 @@ async function handleChannels(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   const query = parseOptionalQuery(ctx.url, "q", 100);
   return json({
-    items: await listChannels(ctx.env.DB, account.id, query, videoScope(ctx)),
+    items: await listChannels(ctx.env.DB, account.id, query, videoScope(ctx), ctx.url.searchParams.get("excluded") === "true"),
   });
+}
+
+async function handleChannelExclusion(ctx: RouteContext): Promise<Response> {
+  const account = requireAccount(ctx);
+  const channelId = routeParam(ctx, 0, "channelId");
+  if (!await getChannelRow(ctx.env.DB, channelId))
+    throw new HttpError(404, "CHANNEL_NOT_FOUND", "Canal no encontrado.");
+  const body = await readJsonObject(ctx.request);
+  const excluded = requiredBoolean(body, "excluded");
+  await setChannelExcluded(ctx.env.DB, account.id, channelId, excluded);
+  await invalidateReads(ctx.env, account.id);
+  return json({ channelId, excluded });
 }
 
 async function handleChannelVideos(ctx: RouteContext): Promise<Response> {
@@ -973,8 +943,18 @@ async function handleUnsubscribe(ctx: RouteContext): Promise<Response> {
 async function handleListPlaylists(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   return json({
-    items: await listPlaylists(ctx.env.DB, account.id, videoScope(ctx)),
+    items: await listPlaylists(ctx.env.DB, account.id, videoScope(ctx), ctx.url.searchParams.get("excluded") === "true"),
   });
+}
+
+async function handlePlaylistExclusion(ctx: RouteContext): Promise<Response> {
+  const account = requireAccount(ctx);
+  const playlistId = routeParam(ctx, 0, "playlistId");
+  const body = await readJsonObject(ctx.request);
+  const excluded = requiredBoolean(body, "excluded");
+  if (!await setPlaylistExcluded(ctx.env.DB, account.id, playlistId, excluded))
+    throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Lista no encontrada.");
+  return json({ playlistId, excluded });
 }
 
 async function handleCreatePlaylist(ctx: RouteContext): Promise<Response> {
@@ -1068,12 +1048,14 @@ async function ownedRemotePlaylist(ctx: RouteContext) {
   const account = requireAccount(ctx);
   const id = routeParam(ctx, 0, "playlistId");
   const row = await ctx.env.DB.prepare(
-    "SELECT id,source FROM playlists WHERE id=? AND account_id=?",
+    "SELECT id,source,excluded FROM playlists WHERE id=? AND account_id=?",
   )
     .bind(id, account.id)
-    .first<{ id: string; source: string }>();
+    .first<{ id: string; source: string; excluded: number }>();
   if (!row)
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Lista no encontrada.");
+  if (row.excluded)
+    throw new HttpError(409, "PLAYLIST_EXCLUDED", "Vuelve a incluir la lista antes de sincronizarla.");
   if (row.source !== "youtube")
     throw new HttpError(
       400,
@@ -1546,6 +1528,7 @@ const ROUTES: Route[] = [
     handler: handleBulkWatch,
   },
   { method: "GET", pattern: /^\/api\/channels$/, handler: handleChannels },
+  { method: "PATCH", pattern: /^\/api\/channels\/([^/]+)\/exclusion$/, handler: handleChannelExclusion },
   {
     method: "GET",
     pattern: /^\/api\/channels\/([^/]+)\/videos$/,
@@ -1566,6 +1549,7 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/playlists$/,
     handler: handleListPlaylists,
   },
+  { method: "PATCH", pattern: /^\/api\/playlists\/([^/]+)\/exclusion$/, handler: handlePlaylistExclusion },
   {
     method: "POST",
     pattern: /^\/api\/playlists$/,

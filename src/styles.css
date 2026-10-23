@@ -300,14 +300,6 @@ label > textarea {
     color: var(--muted);
     font-size: 12px;
 }
-.status-dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    background: var(--green);
-}
 .main-shell {
     margin-left: 232px;
 }
@@ -552,8 +544,25 @@ label > textarea {
     background: var(--surface);
     transition:
         border-color 0.15s,
-        box-shadow 0.15s;
+        box-shadow 0.15s,
+        transform 0.15s;
 }
+.swipe-feedback {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    z-index: 1;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--green);
+    font-size: 12px;
+    font-weight: 600;
+    pointer-events: none;
+}
+.video-card.is-swiping { transition: none; }
+.exclusion-filter { width: fit-content; margin: 16px 0 24px; }
+.catalog-sync { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); }
 .video-card:hover {
     border-color: color-mix(in srgb, var(--green) 28%, var(--border));
     box-shadow: 0 2px 10px #302a280f;
@@ -932,11 +941,20 @@ label > textarea {
     background: var(--surface);
     color: var(--muted);
 }
+.search-input:focus-within {
+    outline: 2px solid var(--green);
+    outline-offset: 2px;
+}
 .search-input input {
+    flex: 1;
+    min-width: 0;
     min-height: 44px;
     padding: 0;
     border: 0;
     background: transparent;
+}
+.search-input input:focus-visible {
+    outline: none;
 }
 .channels-grid {
     display: grid;
@@ -999,6 +1017,12 @@ label > textarea {
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
 }
+.channel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
 .inline-form {
     display: flex;
     gap: 8px;
@@ -1028,9 +1052,6 @@ label > textarea {
     gap: 16px;
 }
 .playlist-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
     min-width: 0;
     padding: 16px;
     border: 1px solid var(--border);
@@ -1039,7 +1060,24 @@ label > textarea {
 }
 .playlist-card:hover {
     border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+}
+.playlist-card-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
     color: var(--text);
+}
+.playlist-card-actions {
+    display: flex;
+    margin: 12px 0 0 56px;
+}
+.playlist-card-actions .button {
+    max-width: 100%;
+    min-height: 44px;
+    height: auto;
+    white-space: normal;
+    text-align: center;
 }
 .playlist-icon {
     width: 44px;
@@ -1081,7 +1119,7 @@ label > textarea {
     color: var(--muted);
     font-size: 12px;
 }
-.playlist-card > svg {
+.playlist-card-link > svg {
     flex-shrink: 0;
     color: var(--muted);
 }
@@ -1187,18 +1225,6 @@ label > textarea {
 .pill.edit-auth.denied {
     background: var(--surface-2);
     color: var(--muted);
-}
-.threshold-value {
-    margin: 8px 0 0;
-    color: var(--green);
-    font-size: 28px;
-    font-weight: 650;
-    line-height: 1.2;
-}
-.threshold-value > span {
-    margin-left: 2px;
-    font-size: 15px;
-    font-weight: 500;
 }
 .theme-options {
     display: flex;
@@ -1334,12 +1360,6 @@ label > textarea {
 .watch-primary {
     min-width: 0;
 }
-.watch-back {
-    margin-bottom: 8px;
-}
-.watch-back .back-link {
-    margin: 0;
-}
 .player-section {
     position: relative;
 }
@@ -1442,10 +1462,6 @@ label > textarea {
 }
 .description {
     margin-top: 16px;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
 }
 .description summary {
     display: flex;
@@ -1478,18 +1494,9 @@ label > textarea {
     overflow-wrap: anywhere;
     white-space: pre-wrap;
 }
-.watch-state-note {
-    display: flex;
-    align-items: center;
-    gap: 6px 10px;
-    flex-wrap: wrap;
-    margin: 12px 0 24px;
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 1.5;
-}
 .comments-section {
-    padding-top: 16px;
+    margin-top: 24px;
+    padding-top: 24px;
     border-top: 1px solid var(--border);
 }
 .section-title {
@@ -1876,9 +1883,6 @@ label > textarea {
     .watch-main {
         padding: 0 0 calc(96px + env(safe-area-inset-bottom));
     }
-    .watch-back {
-        margin: 4px 16px 8px;
-    }
     .player-viewport {
         border-radius: 0;
     }
@@ -1916,7 +1920,6 @@ label > textarea {
     .watching .topbar,
     .watching .bottom-nav,
     .watching .page-footer,
-    .watching .watch-back,
     .watching .watch-details,
     .watching .watch-related,
     .watching .toast {

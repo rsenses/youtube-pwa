@@ -23,6 +23,8 @@ const ALL_MIGRATIONS = [
   "0009_active_retention_indexes.sql",
   "0010_websub_channels.sql",
   "0011_weekly_video_retention.sql",
+  "0013_exclusions.sql",
+  "0014_exclusion_websub.sql",
 ];
 
 function splitSql(sql: string): string[] {

@@ -10,10 +10,13 @@ import {
   externalVideoStatement,
   listFeed,
   listChannels,
+  listPlaylists,
   bulkWatchState,
   getVideo,
   setManualWatchState,
   setProgress,
+  setChannelExcluded,
+  setPlaylistExcluded,
   upsertExternalChannel,
   upsertRemoteSubscription,
 } from "../worker/db";
@@ -59,6 +62,7 @@ beforeAll(async () => {
     "0006_retention_indexes.sql",
     "0007_video_broadcast_status.sql",
     "0008_incremental_sync.sql",
+    "0013_exclusions.sql",
   ]) {
     const sql = await readFile(
       new URL(`../migrations/${name}`, import.meta.url),
@@ -336,8 +340,6 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       positionSeconds: 95,
       durationSeconds: 100,
       percent: 95,
-      watched: true,
-      watchedAt: oldDate,
     });
     const read = await getVideo(env.DB, account.id, video.id, "external");
     expect(read?.title).toBe("Updated");
@@ -1398,5 +1400,36 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     await expect(readLimitedText(new Response("😀😀"), 8)).resolves.toBe(
       "😀😀",
     );
+  });
+  it("hides excluded channels and lists without removing their local history", async () => {
+    const now = new Date().toISOString();
+    const channelId = "UCexcluded-history";
+    const videoId = "excluded001";
+    await upsertExternalChannel(env.DB, { id: channelId, title: "Excluded", description: "", thumbnailUrl: null }, future);
+    await upsertRemoteSubscription(env.DB, account.id, channelId, null);
+    await externalVideoStatement(env.DB, {
+      id: videoId, channelId, channelTitle: "Excluded", title: "History", description: "",
+      thumbnailUrl: "", publishedAt: now, durationSeconds: null, viewCount: null, source: "rss",
+    }, future).run();
+    const feed = () => listFeed(env.DB, account.id, { status: "all", channelId: null, cursor: null, limit: 20 }, "external");
+    expect((await feed()).items.some((item) => item.id === videoId)).toBe(true);
+    await setProgress(env.DB, account.id, videoId, { positionSeconds: 100, durationSeconds: 100, percent: 100 });
+    expect((await getVideo(env.DB, account.id, videoId, "external"))?.watched).toBe(false);
+    await setManualWatchState(env.DB, account.id, videoId, true);
+    await setProgress(env.DB, account.id, videoId, { positionSeconds: 0, durationSeconds: 100, percent: 0 });
+    expect((await getVideo(env.DB, account.id, videoId, "external"))?.watched).toBe(true);
+    await setChannelExcluded(env.DB, account.id, channelId, true);
+    expect((await feed()).items.some((item) => item.id === videoId)).toBe(false);
+    expect((await listChannels(env.DB, account.id, null, "external", true)).some((item) => item.id === channelId)).toBe(true);
+    await setChannelExcluded(env.DB, account.id, channelId, false);
+    expect((await feed()).items.some((item) => item.id === videoId)).toBe(true);
+    const playlistId = "excluded-list-1";
+    await env.DB.prepare("INSERT INTO playlists(id,account_id,source,title,created_at,updated_at) VALUES (?,?,'local','History',?,?)")
+      .bind(playlistId, account.id, now, now).run();
+    await setPlaylistExcluded(env.DB, account.id, playlistId, true);
+    expect((await listPlaylists(env.DB, account.id, "external")).some((item) => item.id === playlistId)).toBe(false);
+    expect((await listPlaylists(env.DB, account.id, "external", true)).some((item) => item.id === playlistId)).toBe(true);
+    await setPlaylistExcluded(env.DB, account.id, playlistId, false);
+    expect((await listPlaylists(env.DB, account.id, "external")).some((item) => item.id === playlistId)).toBe(true);
   });
 });

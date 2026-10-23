@@ -151,6 +151,7 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   });
   await page.goto("/watch/M7lc1UVf-VE");
   await expect(page.locator(".watch-actions")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Volver al feed" })).toHaveCount(0);
   await page.evaluate(async () => {
     const session = (await fetch("/api/session").then((r) => r.json())) as {
       csrfToken: string;

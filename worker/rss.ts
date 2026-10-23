@@ -88,25 +88,6 @@ function text(value: unknown, maxLength: number): string {
   return "";
 }
 
-function safeThumbnailUrl(value: unknown): string {
-  const raw = text(value, 500);
-  if (!raw) return "";
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "https:") return "";
-    const host = url.hostname.toLowerCase();
-    const allowed =
-      host.endsWith(".ytimg.com") ||
-      host.endsWith(".ggpht.com") ||
-      host.endsWith(".googleusercontent.com") ||
-      host === "youtube.com" ||
-      host === "www.youtube.com";
-    return allowed ? url.toString() : "";
-  } catch {
-    return "";
-  }
-}
-
 function positiveInt(value: unknown): number | null {
   const raw = text(value, 30);
   if (!/^\d{1,15}$/.test(raw)) return null;
@@ -207,9 +188,9 @@ export function parseAtomFeed(xml: string): ParsedAtomFeed {
     const group = asRecord(first(entry["media:group"]));
     const hasDescription = group?.["media:description"] !== undefined;
     const description = group ? text(group["media:description"], 5000) : "";
-    const thumbnail = group
-      ? safeThumbnailUrl(asRecord(first(group["media:thumbnail"]))?.["@_url"])
-      : "";
+    // Atom media:thumbnail may be a shared image supplied with a notification.
+    // The validated video id is the stable identity for the actual video image.
+    const thumbnail = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
     const community = group ? asRecord(first(group["media:community"])) : null;
     const statistics = community
       ? asRecord(first(community["media:statistics"]))

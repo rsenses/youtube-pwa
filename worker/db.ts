@@ -36,7 +36,7 @@ const ACCOUNT_VIDEO_CONDITION = `(pm.video_id IS NOT NULL OR (v.purged_at IS NUL
   OR EXISTS (SELECT 1 FROM public_read_cache pc WHERE pc.cache_key='public-video:' || v.id
     AND pc.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')))))`;
 
-const DEFAULT_SETTINGS: Settings = { watchThreshold: 90, theme: "system" };
+const DEFAULT_SETTINGS: Settings = { theme: "system" };
 
 export function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -57,7 +57,7 @@ export function toNullableNumber(value: unknown): number | null {
 // as its owner, never to the feed channel that happened to surface it. The feed
 // scan is pinned to idx_videos_feed so the date-ordered LIMIT stops early.
 const SUBSCRIBED_VIDEO_CONDITION = `v.channel_id IN
-  (SELECT channel_id FROM subscriptions WHERE account_id = ? AND active = 1)`;
+  (SELECT channel_id FROM subscriptions WHERE account_id = ? AND active = 1 AND excluded = 0)`;
 const CHANNEL_VIDEO_CONDITION = `v.channel_id = ?`;
 
 const VIDEO_COLUMNS = `
@@ -133,12 +133,11 @@ export async function ensurePreferences(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT OR IGNORE INTO preferences (account_id, watch_threshold, theme, updated_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO preferences (account_id, theme, updated_at)
+       VALUES (?, ?, ?)`,
     )
     .bind(
       accountId,
-      DEFAULT_SETTINGS.watchThreshold,
       DEFAULT_SETTINGS.theme,
       now,
     )
@@ -239,18 +238,14 @@ export async function getPreferences(
 ): Promise<Settings> {
   const row = await db
     .prepare(
-      "SELECT watch_threshold, theme FROM preferences WHERE account_id = ?",
+      "SELECT theme FROM preferences WHERE account_id = ?",
     )
     .bind(accountId)
-    .first<{ watch_threshold: number; theme: string }>();
+    .first<{ theme: string }>();
   if (!row) return { ...DEFAULT_SETTINGS };
   const theme =
     row.theme === "light" || row.theme === "dark" ? row.theme : "system";
-  const threshold = Math.min(
-    100,
-    Math.max(1, toNumber(row.watch_threshold, DEFAULT_SETTINGS.watchThreshold)),
-  );
-  return { watchThreshold: threshold, theme };
+  return { theme };
 }
 
 export async function savePreferences(
@@ -261,14 +256,13 @@ export async function savePreferences(
 ): Promise<Settings> {
   await db
     .prepare(
-      `INSERT INTO preferences (account_id, watch_threshold, theme, updated_at)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO preferences (account_id, theme, updated_at)
+       VALUES (?, ?, ?)
        ON CONFLICT(account_id) DO UPDATE SET
-         watch_threshold = excluded.watch_threshold,
          theme = excluded.theme,
          updated_at = excluded.updated_at`,
     )
-    .bind(accountId, settings.watchThreshold, settings.theme, now)
+    .bind(accountId, settings.theme, now)
     .run();
   return settings;
 }
@@ -378,6 +372,8 @@ export async function listFeed(
   if (options.channelId) {
     conditions.push(CHANNEL_VIDEO_CONDITION);
     params.push(options.channelId);
+    conditions.push("NOT EXISTS(SELECT 1 FROM subscriptions hidden WHERE hidden.account_id=? AND hidden.channel_id=v.channel_id AND hidden.excluded=1)");
+    params.push(accountId);
   }
   if (options.status === "watched") {
     conditions.push("COALESCE(ws.watched, 0) = 1");
@@ -540,8 +536,6 @@ export interface ProgressWrite {
   positionSeconds: number;
   durationSeconds: number | null;
   percent: number;
-  watched: boolean;
-  watchedAt: string | null;
 }
 
 export async function setProgress(
@@ -554,26 +548,18 @@ export async function setProgress(
   await db
     .prepare(
       `INSERT INTO watch_states
-         (account_id, video_id, watched, watched_at, position_seconds, duration_seconds, percent, manual, revision, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
+         (account_id, video_id, position_seconds, duration_seconds, percent, revision, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)
        ON CONFLICT(account_id, video_id) DO UPDATE SET
          position_seconds = excluded.position_seconds,
          duration_seconds = COALESCE(excluded.duration_seconds, watch_states.duration_seconds),
          percent = CASE WHEN excluded.duration_seconds IS NULL THEN watch_states.percent ELSE excluded.percent END,
-         watched = CASE WHEN watch_states.manual = 1 THEN watch_states.watched ELSE excluded.watched END,
-         watched_at = CASE
-           WHEN watch_states.manual = 1 THEN watch_states.watched_at
-           WHEN excluded.watched = 1 AND watch_states.watched = 0 THEN excluded.watched_at
-           ELSE watch_states.watched_at
-         END,
          revision = watch_states.revision + 1,
          updated_at = excluded.updated_at`,
     )
     .bind(
       accountId,
       videoId,
-      progress.watched ? 1 : 0,
-      progress.watched ? progress.watchedAt : null,
       progress.positionSeconds,
       progress.durationSeconds,
       progress.percent,
@@ -672,11 +658,13 @@ export async function listChannels(
   accountId: string,
   query: string | null,
   scope: VideoScope,
+  excluded = false,
 ): Promise<Channel[]> {
   const conditions = [
     "c.purged_at IS NULL",
     scope === "fixture" ? "c.source = 'fixture'" : "c.source <> 'fixture'",
-    `(s.active = 1 OR EXISTS (
+    `COALESCE(s.excluded, 0) = ${excluded ? 1 : 0}`,
+    `(s.active = 1 OR s.excluded = 1 OR EXISTS (
         SELECT 1 FROM videos v WHERE v.channel_id = c.id AND v.purged_at IS NULL
           AND ${videoSourceCondition(scope)}
       ))`,
@@ -691,7 +679,8 @@ export async function listChannels(
       `SELECT c.id AS id, c.title AS title, c.thumbnail_url AS thumbnailUrl,
               c.description AS description,
               CASE WHEN s.active = 1 THEN 1 ELSE 0 END AS subscribed,
-              s.last_synced_at AS lastSyncedAt
+              s.last_synced_at AS lastSyncedAt,
+              COALESCE(s.excluded, 0) AS excluded
        FROM channels c
        LEFT JOIN subscriptions s ON s.channel_id = c.id AND s.account_id = ?
        WHERE ${conditions.join(" AND ")}
@@ -712,6 +701,7 @@ export async function listChannels(
       row.lastSyncedAt === null || row.lastSyncedAt === undefined
         ? null
         : String(row.lastSyncedAt),
+    excluded: toNumber(row.excluded) === 1,
   }));
 }
 
@@ -799,6 +789,7 @@ interface PlaylistRow extends Record<string, unknown> {
   remote_id: string | null;
   privacy_status: string | null;
   item_count: number;
+  excluded: number;
 }
 
 function mapPlaylistSummary(row: PlaylistRow): PlaylistSummary {
@@ -808,6 +799,7 @@ function mapPlaylistSummary(row: PlaylistRow): PlaylistSummary {
     description: String(row.description ?? ""),
     source: row.source === "youtube" ? "youtube" : "local",
     itemCount: toNumber(row.item_count),
+    excluded: toNumber(row.excluded) === 1,
   };
 }
 
@@ -815,10 +807,11 @@ export async function listPlaylists(
   db: D1Database,
   accountId: string,
   scope: VideoScope,
+  excluded = false,
 ): Promise<PlaylistSummary[]> {
   const result = await db
     .prepare(
-      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status,
+      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded,
               CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
                 (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
                  WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
@@ -827,7 +820,7 @@ export async function listPlaylists(
                    AND ${videoSourceCondition(scope)})
               END AS item_count
        FROM playlists p
-       WHERE p.account_id = ?
+       WHERE p.account_id = ? AND p.excluded = ${excluded ? 1 : 0}
        ORDER BY p.source ASC, p.title COLLATE NOCASE ASC`,
     )
     .bind(accountId)
@@ -843,7 +836,7 @@ export async function getPlaylistRow(
 ): Promise<PlaylistRow | null> {
   const row = await db
     .prepare(
-      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status,
+      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded,
               CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
                 (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
                  WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
@@ -895,6 +888,34 @@ export async function getPlaylistDetail(
     ...mapPlaylistSummary(row),
     items: await getPlaylistItems(db, accountId, playlistId, scope),
   };
+}
+
+export async function setChannelExcluded(
+  db: D1Database,
+  accountId: string,
+  channelId: string,
+  excluded: boolean,
+): Promise<void> {
+  // A known, unsubscribed channel may still appear through a saved video.
+  await db.prepare(
+    `INSERT INTO subscriptions(account_id,channel_id,active,excluded,created_at,updated_at)
+     SELECT ?,id,0,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     FROM channels WHERE id=?
+     ON CONFLICT(account_id,channel_id) DO UPDATE SET excluded=excluded.excluded,
+       updated_at=excluded.updated_at`,
+  ).bind(accountId, excluded ? 1 : 0, channelId).run();
+}
+
+export async function setPlaylistExcluded(
+  db: D1Database,
+  accountId: string,
+  playlistId: string,
+  excluded: boolean,
+): Promise<number> {
+  const result = await db.prepare(
+    "UPDATE playlists SET excluded=?,updated_at=? WHERE account_id=? AND id=?",
+  ).bind(excluded ? 1 : 0, nowIso(), accountId, playlistId).run();
+  return result.meta.changes ?? 0;
 }
 
 export interface NewPlaylist {

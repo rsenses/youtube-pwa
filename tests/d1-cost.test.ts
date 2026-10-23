@@ -31,6 +31,7 @@ beforeAll(async () => {
     "0007_video_broadcast_status",
     "0008_incremental_sync",
     "0012_playlist_unimported",
+    "0013_exclusions",
   ]) {
     const sql = (
       await readFile(
@@ -487,8 +488,8 @@ it("measures catalogue cost: current counts versus remote_item_count and local-o
   );
   expect(proposed).toHaveLength(45);
   expect(candidate.writes).toBe(0);
-  expect(proposed.map((row) => row.id)).toEqual(
-    current45.map((playlist) => playlist.id),
+  expect(proposed.map((row) => row.id).sort()).toEqual(
+    current45.map((playlist) => playlist.id).sort(),
   );
 
   const currentById = new Map(

@@ -40,6 +40,8 @@ const ALL_MIGRATIONS = [
   "0009_active_retention_indexes.sql",
   "0010_websub_channels.sql",
   "0011_weekly_video_retention.sql",
+  "0013_exclusions.sql",
+  "0014_exclusion_websub.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -394,7 +396,7 @@ describe("WebSub-enabled sync cutover", () => {
       )?.type,
     ).toBe("subscriptions");
   });
-  it("queues only subscriptions for all and returns rss as a no-op", async () => {
+  it("queues only subscriptions for all and keeps manual rss separate", async () => {
     const { handleSync } = await import("../worker/sync");
     const account = await createAccount("queue-owner");
     const sent: Array<{ jobId: string; version: number }> = [];
@@ -429,13 +431,38 @@ describe("WebSub-enabled sync cutover", () => {
     });
     expect(external).not.toHaveBeenCalled();
 
-    const rss = await handleSync(queueEnv, account, "rss");
-    expect(rss).toMatchObject({ type: "rss", status: "noop", items: 0 });
+    await expect(handleSync(queueEnv, account, "rss")).rejects.toMatchObject({ code: "SYNC_BUSY" });
     expect(sent).toHaveLength(1);
     expect(external).not.toHaveBeenCalled();
   });
 
-  it("cuts persisted all/rss/metadata jobs to done without external requests", async () => {
+  it("runs a manual RSS recovery under WebSub without updating subscriptions", async () => {
+    const { handleSync } = await import("../worker/sync");
+    const { consumeSyncQueue } = await import("../worker/queue-sync");
+    const account = await createAccount("manual-rss-owner");
+    const channelId = "UCmanual-rss";
+    await insertChannel(channelId);
+    await subscribe(account.id, channelId);
+    const sent: Array<{ jobId: string; version: number }> = [];
+    const queueEnv = { ...env, SYNC_QUEUE: { send: async (message: { jobId: string; version: number }) => { sent.push(message); } } } as unknown as Env;
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toContain("/feeds/videos.xml?channel_id=");
+      return new Response(atom(channelId, "manualrss01"), { headers: { "content-type": "application/atom+xml" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const summary = await handleSync(queueEnv, account, "rss");
+    expect(summary.job).toMatchObject({ type: "rss", phase: "rss" });
+    for (let i = 0; i < sent.length && i < 8; i++) {
+      const message = sent[i];
+      await consumeSyncQueue(fakeBatch([{ body: message, ack: vi.fn(), retry: vi.fn() }]), queueEnv);
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await db.prepare("SELECT id FROM videos WHERE id='manualrss01'").first()).toMatchObject({ id: "manualrss01" });
+    expect((await db.prepare("SELECT status FROM sync_jobs WHERE id=?").bind(summary.job!.id).first<{status:string}>())?.status).toBe("success");
+    expect(await db.prepare("SELECT 1 FROM sync_state WHERE account_id=? AND type='subscriptions'").bind(account.id).first()).toBeNull();
+  });
+
+  it("cuts legacy all and completed rss jobs to done without external requests", async () => {
     const { consumeSyncQueue } = await import("../worker/queue-sync");
     const jobs = [
       {

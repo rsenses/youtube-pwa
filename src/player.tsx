@@ -84,7 +84,7 @@ export function Player({
         let timer: number | undefined;
         let lastTime = 0;
         let inFlight = false;
-        const persist = async (ended = false) => {
+        const persist = async () => {
             const p = player.current;
             if (!p || inFlight || cancelled) return;
             let seconds = 0,
@@ -102,7 +102,7 @@ export function Player({
                 duration <= 0
             )
                 return;
-            if (!ended && Math.abs(seconds - lastTime) < 1) return;
+            if (Math.abs(seconds - lastTime) < 1) return;
             lastTime = seconds;
             inFlight = true;
             try {
@@ -112,7 +112,6 @@ export function Player({
                     {
                         positionSeconds: seconds,
                         durationSeconds: duration,
-                        ended,
                         revision: revisionRef.current,
                     },
                 );
@@ -166,7 +165,7 @@ export function Player({
                         },
                         onStateChange: (event: { data: number }) => {
                             if (event.data === 0 || event.data === 2)
-                                void persist(event.data === 0);
+                                void persist();
                         },
                         onError: (event: { data: number }) =>
                             setError(

@@ -592,7 +592,7 @@ async function eligibleVideoIds(
            SELECT 1
            FROM subscriptions s
            JOIN accounts a ON a.id = s.account_id
-           WHERE s.channel_id = ? AND s.active = 1
+           WHERE s.channel_id = ? AND s.active = 1 AND s.excluded = 0
              AND a.mode = 'real' AND a.connected = 1
              AND NOT EXISTS (
                SELECT 1 FROM watch_states ws

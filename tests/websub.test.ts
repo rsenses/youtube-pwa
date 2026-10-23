@@ -12,6 +12,7 @@ import {
 } from "../worker/websub";
 import { readGlobalFeedRevision } from "../worker/channel-sync";
 import { parseAtomFeed } from "../worker/rss";
+import { setChannelExcluded } from "../worker/db";
 
 const SECRET = "fixture-websub-secret-not-a-real-credential";
 const APP_ORIGIN = "https://alveo.test";
@@ -26,6 +27,8 @@ const ALL_MIGRATIONS = [
   "0008_incremental_sync.sql",
   "0009_active_retention_indexes.sql",
   "0010_websub_channels.sql",
+  "0013_exclusions.sql",
+  "0014_exclusion_websub.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -684,7 +687,7 @@ describe("durable notification application", () => {
       channel_id: channelId,
       title: "Original",
       description: "Rich description",
-      thumbnail_url: "https://i.ytimg.com/vi/notify00001/hq.jpg",
+      thumbnail_url: "https://i.ytimg.com/vi/notify00001/mqdefault.jpg",
       duration_seconds: 240,
       view_count: 77,
     });
@@ -748,7 +751,7 @@ describe("durable notification application", () => {
     expect(row).toMatchObject({
       title: "Sparse title",
       description: "Rich description",
-      thumbnail_url: "https://i.ytimg.com/vi/notify00001/hq.jpg",
+      thumbnail_url: "https://i.ytimg.com/vi/notify00001/mqdefault.jpg",
       duration_seconds: 240,
       view_count: 77,
     });
@@ -802,7 +805,7 @@ describe("durable notification application", () => {
     expect(row).toMatchObject({
       title: "Sparse title",
       description: "Rich description",
-      thumbnail_url: "https://i.ytimg.com/vi/notify00001/hq.jpg",
+      thumbnail_url: "https://i.ytimg.com/vi/notify00001/mqdefault.jpg",
       duration_seconds: 240,
       view_count: 77,
     });
@@ -1537,9 +1540,28 @@ describe("sparse Atom parsing", () => {
       publishedAt: "2026-10-22T10:00:00.000Z",
       updatedAt: "2026-10-22T11:00:00.000Z",
       hasDescription: false,
-      hasThumbnail: false,
+      hasThumbnail: true,
       hasDuration: false,
       hasViewCount: false,
     });
   });
+});
+
+it("keeps shared WebSub interest until every follower excludes the channel, then restores it", async () => {
+  const channelId = "UCexcluded-shared";
+  await seedSubscribed(channelId, "excluded-owner-a");
+  await insertAccount("excluded-owner-b");
+  await db.prepare(
+    "INSERT INTO subscriptions(account_id,channel_id,active,created_at,updated_at) VALUES (?,?,1,?,?)",
+  ).bind("excluded-owner-b", channelId, new Date().toISOString(), new Date().toISOString()).run();
+  const desired = async () => (await db.prepare(
+    "SELECT desired FROM websub_channels WHERE channel_id=?",
+  ).bind(channelId).first<{ desired: number }>())?.desired;
+  expect(await desired()).toBe(1);
+  await setChannelExcluded(db, "excluded-owner-a", channelId, true);
+  expect(await desired()).toBe(1);
+  await setChannelExcluded(db, "excluded-owner-b", channelId, true);
+  expect(await desired()).toBe(0);
+  await setChannelExcluded(db, "excluded-owner-a", channelId, false);
+  expect(await desired()).toBe(1);
 });

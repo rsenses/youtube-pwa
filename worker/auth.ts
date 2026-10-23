@@ -850,9 +850,9 @@ export async function handleDeleteAccountData(
         account.id,
       ),
       env.DB.prepare(
-        `INSERT INTO preferences (account_id, watch_threshold, theme, updated_at)
-         VALUES (?, 90, 'system', ?)
-         ON CONFLICT(account_id) DO UPDATE SET watch_threshold = 90, theme = 'system', updated_at = excluded.updated_at`,
+        `INSERT INTO preferences (account_id, theme, updated_at)
+         VALUES (?, 'system', ?)
+         ON CONFLICT(account_id) DO UPDATE SET theme = 'system', updated_at = excluded.updated_at`,
       ).bind(account.id, nowIso()),
     ];
     const results = await env.DB.batch(statements);

@@ -327,14 +327,14 @@ async function subscriptionStep(env: Env, account: AccountRow, s: State) {
   s.items += result.items;
   if (!result.more)
     s.phase =
-      s.requested === "subscriptions" || isWebSubEnabled(env) ? "done" : "rss";
+      s.requested === "subscriptions" ? "done" : "rss";
 }
 async function rssStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
   if (!s.rss) {
     const row = await env.DB.prepare(
       `SELECT c.id,c.title FROM subscriptions sub JOIN channels c ON c.id=sub.channel_id
-   WHERE sub.account_id=? AND sub.active=1 AND sub.channel_id>? ORDER BY sub.channel_id LIMIT 1`,
+   WHERE sub.account_id=? AND sub.active=1 AND sub.excluded=0 AND sub.channel_id>? ORDER BY sub.channel_id LIMIT 1`,
     )
       .bind(account.id, s.rssCursor || "")
       .first<{ id: string; title: string }>();
@@ -540,16 +540,27 @@ function videoFromApi(item: YouTubeVideoItem): ExternalVideo | null {
 }
 async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
   const now = nowIso();
+  if (s.playlist) {
+    const stillIncluded = await env.DB.prepare(
+      "SELECT 1 FROM playlists WHERE id=? AND account_id=? AND excluded=0",
+    ).bind(s.playlist.id, account.id).first();
+    if (!stillIncluded) {
+      s.playlistCursor = s.playlist.id;
+      delete s.playlist;
+      if (s.playlistId) s.phase = "done";
+      return;
+    }
+  }
   if (!s.playlist) {
     const p = s.playlistId
       ? await env.DB.prepare(
-          "SELECT id,remote_id FROM playlists WHERE id=? AND id>? AND account_id=? AND source='youtube' AND remote_id IS NOT NULL",
+          "SELECT id,remote_id FROM playlists WHERE id=? AND id>? AND account_id=? AND excluded=0 AND source='youtube' AND remote_id IS NOT NULL",
         )
           .bind(s.playlistId, s.playlistCursor || "", account.id)
           .first<{ id: string; remote_id: string }>()
       : await env.DB.prepare(
           `SELECT id,remote_id FROM playlists
-           WHERE account_id=? AND id>? AND source='youtube' AND items_synced_at IS NULL
+           WHERE account_id=? AND id>? AND excluded=0 AND source='youtube' AND items_synced_at IS NULL
            ORDER BY id LIMIT 1`,
         )
           .bind(account.id, s.playlistCursor || "")
@@ -734,7 +745,7 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
  AND v.published_at>=?
  AND (v.expires_at<=? OR v.details_expires_at<=? OR v.details_fetched_at IS NULL OR v.details_fetched_at<=?
  OR ((v.live_broadcast_content IN ('live','upcoming') OR (v.live_broadcast_content IS NULL AND v.is_live=1)) AND v.details_fetched_at<=?))
- AND EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1)
+ AND EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1 AND sub.excluded=0)
  ORDER BY v.id LIMIT 8`,
       )
         .bind(
@@ -811,10 +822,14 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
 }
 async function step(env: Env, account: AccountRow, s: State) {
   s.since = s.lastSuccessAt || null;
+  if (s.requested === "rss" && s.phase !== "rss") {
+    s.phase = "done";
+    return;
+  }
   // Cut over persisted jobs too: enabled discovery is global, never per account.
   if (
     isWebSubEnabled(env) &&
-    s.requested !== "playlists" &&
+    s.requested !== "playlists" && s.requested !== "rss" &&
     s.phase !== "subscriptions"
   ) {
     s.phase = "done";

@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
 import { Link } from "react-router-dom";
-import { api, dateLabel, duration, videoUrl, type Video } from "./api";
+import { api, dateLabel, duration, videoThumbnail, videoUrl, type Video } from "./api";
 import { videoType } from "../shared/video-type";
 export function Icon({ name, size = 22 }: { name: string; size?: number }) {
     const paths: Record<string, ReactNode> = {
@@ -142,15 +142,20 @@ export function VideoCard({
     video,
     onChange,
     compact = false,
+    swipeToWatch = false,
     extra,
 }: {
     video: Video;
     onChange?: (v: Video) => void;
     compact?: boolean;
+    swipeToWatch?: boolean;
     extra?: ReactNode;
 }) {
     const [busy, setBusy] = useState(false),
-        [error, setError] = useState("");
+        [error, setError] = useState(""),
+        [swipe, setSwipe] = useState(0);
+    const start = useRef<{ x: number; y: number } | null>(null);
+    const suppressClickUntil = useRef(0);
     const type = videoType(video);
     async function toggle() {
         setBusy(true);
@@ -168,17 +173,53 @@ export function VideoCard({
             setBusy(false);
         }
     }
+    function touchStart(event: TouchEvent<HTMLElement>) {
+        if (!swipeToWatch || busy || video.watched || event.touches.length !== 1) return;
+        start.current = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+    }
+    function touchMove(event: TouchEvent<HTMLElement>) {
+        if (!start.current) return;
+        const dx = event.touches[0].clientX - start.current.x;
+        const dy = event.touches[0].clientY - start.current.y;
+        if (Math.abs(dy) > 15 && Math.abs(dy) > Math.abs(dx)) {
+            start.current = null;
+            setSwipe(0);
+            return;
+        }
+        if (dx > 18 && dx > Math.abs(dy) * 1.4) {
+            suppressClickUntil.current = Date.now() + 500;
+            setSwipe(Math.min(dx, 110));
+        }
+    }
+    function touchEnd() {
+        const completed = start.current && swipe >= 80;
+        start.current = null;
+        setSwipe(0);
+        if (completed) void toggle();
+    }
     return (
         <article
-            className={`video-card ${compact ? "compact" : ""} ${video.watched ? "is-watched" : ""}`}
+            className={`video-card ${compact ? "compact" : ""} ${video.watched ? "is-watched" : ""} ${swipe > 0 ? "is-swiping" : ""}`}
+            style={swipeToWatch ? { transform: `translateX(${swipe}px)`, touchAction: "pan-y" } : undefined}
+            onTouchStart={touchStart}
+            onTouchMove={touchMove}
+            onTouchEnd={touchEnd}
+            onTouchCancel={() => { start.current = null; setSwipe(0); }}
+            onClickCapture={(event) => {
+                if (Date.now() < suppressClickUntil.current) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+            }}
         >
+            {swipeToWatch && swipe > 0 && <span className="swipe-feedback" aria-hidden="true">{swipe >= 80 ? "Soltar para marcar visto" : "Desliza para marcar visto"}</span>}
             <Link
                 to={videoUrl(video.id)}
                 className="thumbnail"
                 aria-label={`Ver ${video.title}`}
             >
                 <img
-                    src={video.thumbnailUrl || "/thumbs/01.svg"}
+                    src={videoThumbnail(video)}
                     alt=""
                     loading="lazy"
                 />

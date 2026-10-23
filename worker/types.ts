@@ -57,6 +57,7 @@ export interface Channel {
   description: string;
   subscribed: boolean;
   lastSyncedAt: string | null;
+  excluded?: boolean;
 }
 
 export interface PlaylistSummary {
@@ -65,6 +66,7 @@ export interface PlaylistSummary {
   description: string;
   source: "local" | "youtube";
   itemCount: number;
+  excluded?: boolean;
 }
 
 export interface PlaylistDetail extends PlaylistSummary {
@@ -72,7 +74,6 @@ export interface PlaylistDetail extends PlaylistSummary {
 }
 
 export interface Settings {
-  watchThreshold: number;
   theme: "system" | "light" | "dark";
 }
 

@@ -34,6 +34,8 @@ const ALL_MIGRATIONS = [
   "0008_incremental_sync.sql",
   "0009_active_retention_indexes.sql",
   "0010_websub_channels.sql",
+  "0013_exclusions.sql",
+  "0014_exclusion_websub.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -373,7 +375,7 @@ function atomFeed(
 beforeAll(async () => {
   db = (await mf.getD1Database("DB")) as unknown as D1Database;
   // Seed pre-existing eligible followers before 0010 to exercise the backfill.
-  await applyMigrations(db, ALL_MIGRATIONS.slice(0, -1));
+  await applyMigrations(db, ALL_MIGRATIONS.slice(0, -3));
   await insertAccount("pre-owner");
   await insertAccount("demo-owner", 1, "demo");
   await insertAccount("off-owner", 0);
@@ -384,6 +386,8 @@ beforeAll(async () => {
   await subscribe("demo-owner", "UCdemoonly");
   await subscribe("off-owner", "UCoffline");
   await applyMigration(db, "0010_websub_channels.sql");
+  await applyMigration(db, "0013_exclusions.sql");
+  await applyMigration(db, "0014_exclusion_websub.sql");
 
   env = {
     DB: db,

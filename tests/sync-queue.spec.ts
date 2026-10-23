@@ -125,6 +125,11 @@ test.beforeEach(async ({ page }) => {
 test("un clic encola una sola vez y muestra el progreso del servidor sin repetir el bucle local", async ({
   page,
 }) => {
+  await page.route(/\/api\/session$/, async (route) => {
+    const response = await route.fetch();
+    const session = await response.json();
+    await route.fulfill({ json: { ...session, mode: "real", connected: true } });
+  });
   let posts = 0;
   let statusReads = 0;
   let readsAfterPost = 0;
@@ -135,11 +140,12 @@ test("un clic encola una sola vez y muestra el progreso del servidor sin repetir
     const jobs = !posts
       ? []
       : readsAfterPost <= 1
-        ? [queuedJob()]
+        ? [queuedJob({ type: "rss", phase: "rss" })]
         : readsAfterPost === 2
           ? [
               queuedJob({
                 status: "running",
+                type: "rss",
                 phase: "rss",
                 items: 2,
                 processedChannels: 1,
@@ -149,6 +155,7 @@ test("un clic encola una sola vez y muestra el progreso del servidor sin repetir
           : [
               queuedJob({
                 status: "success",
+                type: "rss",
                 message: "Sincronización completada.",
                 phase: "done",
                 items: 12,
@@ -172,6 +179,7 @@ test("un clic encola una sola vez y muestra el progreso del servidor sin repetir
       await route.continue();
       return;
     }
+    expect(route.request().postDataJSON()).toEqual({ type: "rss" });
     posts++;
     await route.fulfill({
       status: 200,
@@ -179,12 +187,12 @@ test("un clic encola una sola vez y muestra el progreso del servidor sin repetir
       body: JSON.stringify({
         status: "running",
         mode: "real",
-        type: "all",
+        type: "rss",
         items: 0,
         // A queued acknowledgement must ignore the legacy pagination flag.
         more: true,
         message: "Sincronización aceptada",
-        job: queuedJob(),
+        job: queuedJob({ type: "rss", phase: "rss" }),
       }),
     });
   });
@@ -197,12 +205,12 @@ test("un clic encola una sola vez y muestra el progreso del servidor sin repetir
   await expect(section.locator(".sync-history")).toContainText("En curso");
   await expect(jobPanel).toHaveCount(0);
 
-  await section.getByRole("button", { name: "Actualizar" }).click();
+  await section.getByRole("button", { name: "Reconciliar vídeos por RSS" }).click();
 
   await expect(page.locator(".toast")).toContainText("cola");
   await expect(page.locator(".toast")).toContainText("cierres la página");
   await expect(jobPanel).toContainText("En cola");
-  await expect(jobPanel).toContainText("Fase: Suscripciones");
+  await expect(jobPanel).toContainText("Fase: RSS");
   await expect(section.locator(".sync-history")).toContainText("En curso");
   expect(posts).toBe(1);
 

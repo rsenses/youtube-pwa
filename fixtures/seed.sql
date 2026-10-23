@@ -8,8 +8,8 @@ INSERT OR IGNORE INTO accounts
 VALUES
   ('demo', 'demo', 'Demo local', NULL, 0, '', NULL, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
 
-INSERT OR IGNORE INTO preferences (account_id, watch_threshold, theme, updated_at)
-VALUES ('demo', 90, 'system', '2026-10-01T00:00:00.000Z');
+INSERT OR IGNORE INTO preferences (account_id, theme, updated_at)
+VALUES ('demo', 'system', '2026-10-01T00:00:00.000Z');
 
 INSERT OR IGNORE INTO channels
   (id, title, description, thumbnail_url, source, fetched_at, expires_at, purged_at, last_synced_at,
