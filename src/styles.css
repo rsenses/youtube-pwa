@@ -27,6 +27,9 @@
     --shadow: 0 1px 2px #302a2814;
     color-scheme: light;
 }
+@view-transition {
+    navigation: auto;
+}
 :root[data-theme="dark"] {
     --bg: #1c1918;
     --surface: #262120;
@@ -411,6 +414,7 @@ label > textarea {
     flex-shrink: 0;
     border-radius: 50%;
     color: var(--muted);
+    transition: background-color 0.16s ease, color 0.16s ease;
 }
 .icon-button:hover,
 .icon-button.active {
@@ -479,6 +483,7 @@ label > textarea {
     color: var(--muted);
     font-size: 13px;
     font-weight: 500;
+    transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
 }
 .type-filters button.active {
     border-color: transparent;
@@ -499,6 +504,7 @@ label > textarea {
     color: var(--muted);
     font-size: 13px;
     font-weight: 500;
+    transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 .segmented button.active {
     background: var(--surface);
@@ -578,6 +584,11 @@ label > textarea {
     border-radius: 12px;
     background: var(--surface);
     box-shadow: var(--shadow);
+    transform-origin: bottom right;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+@starting-style {
+    .video-card-menu-items { opacity: 0; transform: translateY(6px) scale(0.97); }
 }
 .video-card-menu-items > button,
 .video-card-menu-items > a {
@@ -603,7 +614,8 @@ label > textarea {
     transition:
         border-color 0.15s,
         box-shadow 0.15s,
-        transform 0.15s;
+        transform 0.15s,
+        opacity 0.18s ease;
 }
 .swipe-feedback {
     position: absolute;
@@ -926,6 +938,7 @@ label > textarea {
     border-radius: 12px;
     background: var(--surface-2);
     font-size: 13px;
+    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .bulk-panel > span {
     font-weight: 600;
@@ -1032,6 +1045,7 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--surface);
+    transition: opacity 0.18s ease, border-color 0.16s ease;
 }
 .channel-avatar {
     width: 48px;
@@ -1119,6 +1133,7 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--surface);
+    transition: opacity 0.18s ease, border-color 0.16s ease;
 }
 .playlist-card:hover {
     border-color: color-mix(in srgb, var(--green) 40%, var(--border));
@@ -1201,6 +1216,7 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--surface);
+    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .edit-panel .button {
     align-self: flex-start;
@@ -1677,6 +1693,7 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 12px;
     background: var(--surface);
+    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .save-panel h3 {
     margin: 0 0 6px;
@@ -1705,6 +1722,14 @@ label > textarea {
     min-height: 44px;
     color: var(--green);
     font-size: 14px;
+}
+@starting-style {
+    .video-card,
+    .channel-card,
+    .playlist-card { opacity: 0; }
+    .edit-panel,
+    .save-panel,
+    .bulk-panel { opacity: 0; transform: translateY(6px); }
 }
 .comment {
     display: flex;
@@ -2116,6 +2141,11 @@ label > textarea {
     }
 }
 @media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+        animation: none !important;
+    }
     *,
     *:before,
     *:after {
