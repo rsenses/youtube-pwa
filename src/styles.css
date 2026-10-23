@@ -1253,6 +1253,9 @@ label > textarea {
     flex-wrap: wrap;
     margin-top: 12px;
 }
+.playlist-detail-sync {
+    margin-bottom: 20px;
+}
 .sync-history {
     display: flex;
     flex-direction: column;

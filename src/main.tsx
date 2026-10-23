@@ -1202,7 +1202,7 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
     }
   }, [active, job?.status, onDone]);
   return (
-    <div className="settings-buttons" data-testid="remote-list-sync">
+    <div className={`settings-buttons${id ? " playlist-detail-sync" : ""}`} data-testid="remote-list-sync">
       <button
         className="button secondary"
         disabled={busy || active}
@@ -1232,6 +1232,7 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
           }
         }}
       >
+        {id && <Icon name="sync" size={18} />}
         {id ? "Actualizar desde YouTube" : "Actualizar catálogo de YouTube"}
       </button>
       {job && (
