@@ -388,9 +388,11 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
   if (entries.length) {
     // Only the visible recent page is checked; old entries are never queried.
     const known = await env.DB.prepare(
-      `SELECT id FROM videos WHERE id IN (${entries.map(() => "?").join(",")})`,
+      `SELECT id FROM videos WHERE id IN (${entries.map(() => "?").join(",")})
+       UNION SELECT video_id AS id FROM short_video_tombstones
+       WHERE video_id IN (${entries.map(() => "?").join(",")})`,
     )
-      .bind(...entries.map((entry) => entry.videoId))
+      .bind(...entries.map((entry) => entry.videoId), ...entries.map((entry) => entry.videoId))
       .all<{ id: string }>();
     for (const row of known.results || []) existing.add(row.id);
   }
@@ -748,6 +750,10 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
  AND (v.expires_at<=? OR v.details_expires_at<=? OR v.details_fetched_at IS NULL OR v.details_fetched_at<=?
  OR ((v.live_broadcast_content IN ('live','upcoming') OR (v.live_broadcast_content IS NULL AND v.is_live=1)) AND v.details_fetched_at<=?))
  AND EXISTS(SELECT 1 FROM subscriptions sub WHERE sub.account_id=? AND sub.channel_id=v.channel_id AND sub.active=1 AND sub.excluded=0)
+ AND (v.duration_seconds IS NULL OR v.duration_seconds=0 OR v.duration_seconds>=180
+   OR COALESCE(v.is_live,0)=1 OR COALESCE(v.live_broadcast_content,'none')<>'none'
+   OR EXISTS(SELECT 1 FROM playlist_items pi WHERE pi.video_id=v.id)
+   OR EXISTS(SELECT 1 FROM watch_states chosen WHERE chosen.account_id=? AND chosen.video_id=v.id))
  ORDER BY v.id LIMIT 8`,
       )
         .bind(
@@ -757,6 +763,7 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
           maintenance,
           recent,
           live,
+          account.id,
           account.id,
         )
         .all<{ id: string }>();

@@ -66,6 +66,7 @@ beforeAll(async () => {
     "0007_video_broadcast_status.sql",
     "0008_incremental_sync.sql",
     "0013_exclusions.sql",
+    "0015_short_retention.sql",
   ]) {
     const sql = await readFile(
       new URL(`../migrations/${name}`, import.meta.url),

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import type { Env } from "../worker/types";
 import { runWeeklyVideoRetention } from "../worker/video-retention";
+import { externalVideoStatement, purgeExpiredMetadata } from "../worker/db";
 
 const SECRET = "fixture-websub-secret-not-a-real-credential";
 const APP_ORIGIN = "https://alveo.test";
@@ -25,6 +26,7 @@ const ALL_MIGRATIONS = [
   "0011_weekly_video_retention.sql",
   "0013_exclusions.sql",
   "0014_exclusion_websub.sql",
+  "0015_short_retention.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -149,6 +151,7 @@ async function resetDatabase(): Promise<void> {
     db.prepare("DELETE FROM playlist_items"),
     db.prepare("DELETE FROM playlists"),
     db.prepare("DELETE FROM watch_states"),
+    db.prepare("DELETE FROM short_video_tombstones"),
     db.prepare("DELETE FROM videos"),
     db.prepare("DELETE FROM subscriptions"),
     db.prepare("DELETE FROM sessions"),
@@ -355,6 +358,44 @@ afterAll(async () => {
 });
 
 describe("weekly global video retention", () => {
+  it("discards an untouched short candidate after 30 days without marking it watched", async () => {
+    const channelId = "UCshortage";
+    await seedFollowers(channelId, ["short-owner"]);
+    await insertVideo("shortold0001", channelId, "2026-09-01T00:00:00.000Z");
+    await db.prepare(`UPDATE videos SET duration_seconds=90,short_candidate=1,
+      created_at='2026-09-01T00:00:00.000Z',details_fetched_at='2026-09-01T00:00:00.000Z',
+      details_expires_at='2026-10-01T00:00:00.000Z' WHERE id='shortold0001'`).run();
+    await purgeExpiredMetadata(db, NOW);
+    expect((await db.prepare("SELECT short_candidate,duration_seconds FROM videos WHERE id='shortold0001'").first<{short_candidate:number;duration_seconds:number|null}>())?.short_candidate).toBe(1);
+
+    expect(await runWeeklyVideoRetention(env, NOW)).toBeGreaterThan(0);
+    expect(await videoIds()).toEqual([]);
+    expect((await db.prepare("SELECT video_id FROM short_video_tombstones WHERE video_id='shortold0001'").first())?.video_id).toBe("shortold0001");
+    expect(await watchRow("short-owner", "shortold0001")).toBeNull();
+
+    await externalVideoStatement(db, {
+      id: "shortold0001", channelId, channelTitle: "Channel", title: "Short",
+      description: "", thumbnailUrl: "", publishedAt: "2026-09-01T00:00:00.000Z",
+      durationSeconds: 90, viewCount: null, source: "rss",
+    }, "2099-01-01T00:00:00.000Z", NOW, true).run();
+    expect(await videoIds()).toEqual([]);
+  });
+
+  it("keeps recent, listed and explicitly chosen brief videos", async () => {
+    const channelId = "UCshortprotected";
+    await seedFollowers(channelId, ["short-owner"]);
+    for (const id of ["shortrecent1", "shortlisted1", "shortchosen1", "shortnormal1"]) {
+      await insertVideo(id, channelId, "2026-09-01T00:00:00.000Z");
+      await db.prepare("UPDATE videos SET duration_seconds=90,short_candidate=1,created_at=? WHERE id=?")
+        .bind(id === "shortrecent1" ? "2026-10-01T00:00:00.000Z" : "2026-09-01T00:00:00.000Z", id).run();
+    }
+    await addPlaylistItem("short-owner", "short-list", "shortlisted1");
+    await setWatch("short-owner", "shortchosen1", 0, 1, 0);
+    await db.prepare("UPDATE videos SET duration_seconds=210,short_candidate=0 WHERE id='shortnormal1'").run();
+
+    expect(await runWeeklyVideoRetention(env, NOW)).toBe(0);
+    expect(await videoIds()).toEqual(["shortchosen1", "shortlisted1", "shortnormal1", "shortrecent1"]);
+  });
   it("does nothing while the WebSub flag is disabled", async () => {
     const channelId = "UCdisabled";
     await seedFollowers(channelId, ["off-a", "off-b"]);

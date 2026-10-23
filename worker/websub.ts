@@ -594,6 +594,11 @@ async function eligibleVideoIds(
            JOIN accounts a ON a.id = s.account_id
            WHERE s.channel_id = ? AND s.active = 1 AND s.excluded = 0
              AND a.mode = 'real' AND a.connected = 1
+             AND (v.duration_seconds IS NULL OR v.duration_seconds>=180
+               OR v.duration_seconds=0 OR COALESCE(v.is_live,0)=1
+               OR COALESCE(v.live_broadcast_content,'none')<>'none'
+               OR EXISTS(SELECT 1 FROM watch_states chosen
+                 WHERE chosen.account_id=s.account_id AND chosen.video_id=v.id))
              AND NOT EXISTS (
                SELECT 1 FROM watch_states ws
                WHERE ws.account_id = s.account_id AND ws.video_id = v.id
@@ -646,7 +651,14 @@ async function assertNoLostUpdates(
   const latest = new Map(
     (rows.results ?? []).map((row) => [row.id, row.websub_updated_at]),
   );
+  const inserts = actions.filter((action) => action.kind === "insert");
+  const tombstones = new Set(inserts.length
+    ? ((await env.DB.prepare(
+      `SELECT video_id FROM short_video_tombstones WHERE video_id IN (${inserts.map(() => "?").join(",")})`,
+    ).bind(...inserts.map((action) => action.videoId)).all<{ video_id: string }>()).results ?? []).map((row) => row.video_id)
+    : []);
   for (const action of actions) {
+    if (action.kind === "insert" && tombstones.has(action.videoId)) continue;
     const watermark = latest.get(action.videoId) ?? null;
     const watermarkMs = watermark ? Date.parse(watermark) : Number.NaN;
     if (Number.isFinite(watermarkMs) && watermarkMs >= action.eventMs) continue;
@@ -851,11 +863,12 @@ export async function ingestParsedEntries(
            (id, channel_id, channel_title, title, description, thumbnail_url,
             published_at, duration_seconds, view_count, source, fetched_at,
             expires_at, purged_at, created_at, updated_at, is_live,
-            details_fetched_at, details_expires_at, live_broadcast_content,
+            details_fetched_at, details_expires_at, live_broadcast_content, short_candidate,
             websub_updated_at, websub_hash)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rss', ?, ?, NULL, ?, ?, NULL,
-                NULL, NULL, NULL, ?, ?
-         WHERE EXISTS (
+                NULL, NULL, NULL, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM short_video_tombstones WHERE video_id = ?)
+         AND EXISTS (
            SELECT 1 FROM websub_channels
            WHERE channel_id = ? AND desired = 1
          )
@@ -871,11 +884,14 @@ export async function ingestParsedEntries(
         entry.durationSeconds,
         entry.viewCount,
         now,
-        expiresAt,
+        entry.durationSeconds !== null && entry.durationSeconds > 0 && entry.durationSeconds < 180
+          ? isoInDays(31, new Date(now)) : expiresAt,
         now,
         now,
+        entry.durationSeconds !== null && entry.durationSeconds > 0 && entry.durationSeconds < 180 ? 1 : 0,
         eventAt,
         hash,
+        entry.videoId,
         channelId,
       ),
     );
@@ -914,6 +930,9 @@ export async function ingestParsedEntries(
            channel_id = ?, channel_title = ?, title = ?, description = ?,
            thumbnail_url = ?, published_at = ?, duration_seconds = ?,
            view_count = ?, source = ?, purged_at = NULL,
+           short_candidate = CASE WHEN ? IS NULL THEN short_candidate WHEN ?>0 AND ?<180
+             AND COALESCE(is_live,0)=0 AND COALESCE(live_broadcast_content,'none')='none'
+             THEN 1 ELSE 0 END,
            websub_updated_at = ?, websub_hash = ?,
            expires_at = CASE WHEN expires_at IS NULL OR expires_at < ?
                              THEN ? ELSE expires_at END,
@@ -936,10 +955,15 @@ export async function ingestParsedEntries(
         plan.durationSeconds,
         plan.viewCount,
         plan.source,
+        plan.durationSeconds,
+        plan.durationSeconds,
+        plan.durationSeconds,
         plan.eventAt,
         hash,
-        expiresAt,
-        expiresAt,
+        plan.durationSeconds !== null && plan.durationSeconds > 0 && plan.durationSeconds < 180
+          ? isoInDays(31, new Date(now)) : expiresAt,
+        plan.durationSeconds !== null && plan.durationSeconds > 0 && plan.durationSeconds < 180
+          ? isoInDays(31, new Date(now)) : expiresAt,
         now,
         plan.entry.videoId,
         channelId,

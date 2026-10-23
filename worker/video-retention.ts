@@ -5,6 +5,7 @@ import { isWebSubEnabled } from "./websub";
 
 const PAGE_SIZE = 50;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const SHORT_REVIEW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** A crash releases the claim by expiry; the cursor advances only with deletion. */
 export async function runWeeklyVideoRetention(
@@ -22,16 +23,17 @@ export async function runWeeklyVideoRetention(
     .first<{ cursor_date: string | null; cursor_id: string | null }>();
   if (!state) return 0;
   const floor = oldestVideoDate(now);
-  // Page by the existing date index *before* checking relationships. This also
-  // bounds a pass whose old videos are all pending or in playlists. The 1970
-  // sentinel is an unknown publication date, not evidence of a one-year-old video.
+  const shortFloor = new Date(Date.parse(now) - SHORT_REVIEW_MS).toISOString();
+  // Page by publication date before checking relationships. A candidate gets
+  // at least 30 days from discovery (created_at), even if published earlier.
+  // The 1970 sentinel is an unknown publication date, not evidence of age.
   const page = await env.DB.prepare(
     `SELECT id,published_at FROM videos INDEXED BY idx_videos_feed
     WHERE published_at<? AND published_at>'1970-01-02' AND source<>'fixture'
     AND (published_at,id)>(?,?) ORDER BY published_at,id LIMIT ?`,
   )
     .bind(
-      floor,
+      shortFloor,
       state.cursor_date || "1970-01-02",
       state.cursor_id || "",
       PAGE_SIZE,
@@ -40,21 +42,38 @@ export async function runWeeklyVideoRetention(
   const rows = page.results || [];
   const statements: D1PreparedStatement[] = [];
   if (rows.length) {
+    const ids = rows.map((r) => r.id);
+    const placeholders = ids.map(() => "?").join(",");
+    // A tombstone is much smaller than the video and stops push/RSS discovery
+    // from bringing a discarded candidate straight back. The batch is atomic.
     statements.push(
       env.DB.prepare(
-        `DELETE FROM videos WHERE id IN (${rows.map(() => "?").join(",")})
-      AND published_at<?
+        `INSERT OR IGNORE INTO short_video_tombstones(video_id,published_at)
+         SELECT id,published_at FROM videos WHERE id IN (${placeholders})
+         AND published_at>=? AND created_at<?
+         AND short_candidate=1
+         AND NOT EXISTS(SELECT 1 FROM playlist_items pi WHERE pi.video_id=videos.id)
+         AND NOT EXISTS(SELECT 1 FROM watch_states ws WHERE ws.video_id=videos.id)
+         AND NOT EXISTS(SELECT 1 FROM account_video_metadata pm WHERE pm.video_id=videos.id)`,
+      ).bind(...ids, floor, shortFloor),
+    );
+    statements.push(
+      env.DB.prepare(
+        `DELETE FROM videos WHERE id IN (${placeholders})
+      AND (published_at<? OR EXISTS(SELECT 1 FROM short_video_tombstones st WHERE st.video_id=videos.id))
       AND NOT EXISTS(SELECT 1 FROM playlist_items pi WHERE pi.video_id=videos.id)
-      AND EXISTS(SELECT 1 FROM watch_states ws JOIN accounts a ON a.id=ws.account_id
+      AND ((EXISTS(SELECT 1 FROM short_video_tombstones st WHERE st.video_id=videos.id)
+        AND NOT EXISTS(SELECT 1 FROM watch_states selected WHERE selected.video_id=videos.id))
+      OR (EXISTS(SELECT 1 FROM watch_states ws JOIN accounts a ON a.id=ws.account_id
         WHERE ws.video_id=videos.id AND ws.watched=1 AND a.mode='real' AND a.connected=1)
       AND NOT EXISTS(SELECT 1 FROM watch_states ws JOIN accounts a ON a.id=ws.account_id
         WHERE ws.video_id=videos.id AND ws.watched=0 AND a.mode='real' AND a.connected=1)
       AND NOT EXISTS(SELECT 1 FROM subscriptions s JOIN accounts a ON a.id=s.account_id
         WHERE s.channel_id=videos.channel_id AND s.active=1 AND a.mode='real' AND a.connected=1
-        AND NOT EXISTS(SELECT 1 FROM watch_states ws WHERE ws.account_id=s.account_id AND ws.video_id=videos.id AND ws.watched=1))
+        AND NOT EXISTS(SELECT 1 FROM watch_states ws WHERE ws.account_id=s.account_id AND ws.video_id=videos.id AND ws.watched=1))))
       AND NOT EXISTS(SELECT 1 FROM account_video_metadata pm WHERE pm.video_id=videos.id AND json_extract(pm.metadata,'$.publishedAt')>=?)
       AND EXISTS(SELECT 1 FROM video_retention_state WHERE id=1 AND claim_token=?) RETURNING id`,
-      ).bind(...rows.map((r) => r.id), floor, floor, claim),
+      ).bind(...ids, floor, floor, claim),
     );
     statements.push(
       env.DB.prepare(
@@ -62,6 +81,10 @@ export async function runWeeklyVideoRetention(
       ).bind(now),
     );
   }
+  statements.push(env.DB.prepare(
+    `DELETE FROM short_video_tombstones WHERE video_id IN
+     (SELECT video_id FROM short_video_tombstones WHERE published_at<? LIMIT 50)`,
+  ).bind(floor));
   const last = rows[rows.length - 1];
   statements.push(
     env.DB.prepare(
@@ -77,5 +100,5 @@ export async function runWeeklyVideoRetention(
     ),
   );
   const results = await env.DB.batch(statements);
-  return rows.length ? results[0].results?.length || 0 : 0;
+  return rows.length ? results[1].results?.length || 0 : 0;
 }

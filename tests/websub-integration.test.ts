@@ -42,6 +42,7 @@ const ALL_MIGRATIONS = [
   "0011_weekly_video_retention.sql",
   "0013_exclusions.sql",
   "0014_exclusion_websub.sql",
+  "0015_short_retention.sql",
 ];
 
 function splitSql(sql: string): string[] {

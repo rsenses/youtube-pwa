@@ -792,9 +792,11 @@ async function fetchAndStoreFeed(
   const existing = new Set<string>();
   if (candidates.length) {
     const known = await env.DB.prepare(
-      `SELECT id FROM videos WHERE id IN (${candidates.map(() => "?").join(",")})`,
+      `SELECT id FROM videos WHERE id IN (${candidates.map(() => "?").join(",")})
+       UNION SELECT video_id AS id FROM short_video_tombstones
+       WHERE video_id IN (${candidates.map(() => "?").join(",")})`,
     )
-      .bind(...candidates.map((entry) => entry.videoId))
+      .bind(...candidates.map((entry) => entry.videoId), ...candidates.map((entry) => entry.videoId))
       .all<{ id: string }>();
     for (const row of known.results ?? []) existing.add(row.id);
   }

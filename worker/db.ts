@@ -291,7 +291,7 @@ export async function purgeExpiredMetadata(
       .bind(now),
     db
       .prepare(
-        `UPDATE videos SET duration_seconds = NULL, view_count = NULL, is_live = NULL, live_broadcast_content = NULL,
+      `UPDATE videos SET duration_seconds = CASE WHEN short_candidate=1 THEN duration_seconds ELSE NULL END, view_count = NULL, is_live = NULL, live_broadcast_content = NULL,
       details_fetched_at = NULL
       WHERE details_fetched_at IS NOT NULL AND details_expires_at IS NOT NULL AND details_expires_at <= ?`,
       )
@@ -1130,9 +1130,15 @@ export function externalVideoStatement(
 ): D1PreparedStatement {
   const insert = `INSERT INTO videos
          (id, channel_id, channel_title, title, description, thumbnail_url, published_at,
-          duration_seconds, view_count, source, fetched_at, expires_at, purged_at, created_at, updated_at,
-          is_live, details_fetched_at, details_expires_at, live_broadcast_content)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`;
+         duration_seconds, view_count, source, fetched_at, expires_at, purged_at, created_at, updated_at,
+          is_live, details_fetched_at, details_expires_at, live_broadcast_content, short_candidate)`;
+  const valuesSql = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?`;
+  const shortCandidate = video.durationSeconds !== null && video.durationSeconds > 0 &&
+    video.durationSeconds < 180 && video.isLive !== true &&
+    (video.liveBroadcastContent == null || video.liveBroadcastContent === "none");
+  const retentionDate = shortCandidate
+    ? isoInDays(31, new Date(now))
+    : expiresAt;
   const values = [
     video.id,
     video.channelId,
@@ -1145,21 +1151,24 @@ export function externalVideoStatement(
     video.viewCount,
     video.source,
     now,
-    expiresAt,
+    retentionDate,
     now,
     now,
     video.isLive === undefined ? null : video.isLive ? 1 : 0,
     video.isLive === undefined ? null : now,
     video.isLive === undefined ? null : expiresAt,
     video.liveBroadcastContent ?? null,
+    shortCandidate ? 1 : 0,
   ] as const;
   // RSS imports only durable new video rows; an existing row keeps its details
   // and watch state untouched. The normal upsert remains for metadata reads.
   if (insertOnly)
-    return db.prepare(`${insert} ON CONFLICT(id) DO NOTHING`).bind(...values);
+    return db.prepare(`${insert} SELECT ${valuesSql} WHERE NOT EXISTS
+      (SELECT 1 FROM short_video_tombstones WHERE video_id = ?)
+      ON CONFLICT(id) DO NOTHING`).bind(...values, video.id);
   return db
     .prepare(
-      `${insert}
+      `${insert} VALUES (${valuesSql})
        ON CONFLICT(id) DO UPDATE SET
          channel_id = excluded.channel_id,
          channel_title = CASE WHEN excluded.channel_title <> '' THEN excluded.channel_title ELSE videos.channel_title END,
@@ -1171,6 +1180,8 @@ export function externalVideoStatement(
          view_count = CASE WHEN excluded.source='youtube' THEN excluded.view_count WHEN excluded.source='rss' AND videos.details_fetched_at IS NOT NULL THEN videos.view_count ELSE COALESCE(excluded.view_count, videos.view_count) END,
          is_live = COALESCE(excluded.is_live, videos.is_live),
          live_broadcast_content = CASE WHEN excluded.source='youtube' THEN excluded.live_broadcast_content ELSE videos.live_broadcast_content END,
+         short_candidate = CASE WHEN excluded.source='youtube' THEN excluded.short_candidate
+           WHEN excluded.duration_seconds IS NOT NULL THEN excluded.short_candidate ELSE videos.short_candidate END,
          details_fetched_at = COALESCE(excluded.details_fetched_at, videos.details_fetched_at),
          details_expires_at = COALESCE(excluded.details_expires_at, videos.details_expires_at),
          source = CASE WHEN excluded.source='rss' AND videos.details_fetched_at IS NOT NULL THEN videos.source ELSE excluded.source END,

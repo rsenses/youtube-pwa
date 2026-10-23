@@ -29,6 +29,7 @@ const ALL_MIGRATIONS = [
   "0010_websub_channels.sql",
   "0013_exclusions.sql",
   "0014_exclusion_websub.sql",
+  "0015_short_retention.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -1259,6 +1260,26 @@ async function setWatched(
 }
 
 describe("watched/playlist update eligibility", () => {
+  it("does not refresh an untouched short candidate or reimport a discarded one", async () => {
+    const channelId = "UCshortignored";
+    const now = await seedSubscribed(channelId, "short-ignored-owner");
+    const published = plus(now, -3600_000);
+    await seedVideo("shortign001", channelId, published, plus(now, -3000_000), "Before");
+    await db.prepare("UPDATE videos SET duration_seconds=90,short_candidate=1 WHERE id='shortign001'").run();
+    const changed = await postXml(channelId, atom(channelId, [{
+      id: "shortign001", title: "After", published, updated: plus(now, -1800_000),
+    }]), { sha1: "valid", sha256: "valid" });
+    expect(changed.status).toBe(204);
+    expect((await videoRow("shortign001"))?.title).toBe("Before");
+
+    await db.prepare("INSERT INTO short_video_tombstones(video_id,published_at) VALUES (?,?)")
+      .bind("shortgone01", published).run();
+    const repeated = await postXml(channelId, atom(channelId, [{
+      id: "shortgone01", title: "Discarded", published,
+    }]), { sha1: "valid", sha256: "valid" });
+    expect(repeated.status).toBe(204);
+    expect(await videoRow("shortgone01")).toBeNull();
+  });
   it("skips metadata watched by every interested subscriber and absent from playlists", async () => {
     const channelId = "UCallwatched";
     const now = await seedSubscribed(channelId, "allwatched-a");

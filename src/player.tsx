@@ -163,7 +163,7 @@ export function Player({
                                 timer = window.setInterval(() => {
                                     if (player.current?.getPlayerState() === 1)
                                         void persist();
-                                }, 5000);
+                                }, 30000);
                         },
                         onStateChange: (event: { data: number }) => {
                             if (event.data === 0 || event.data === 2)
@@ -185,6 +185,7 @@ export function Player({
                 if (!cancelled) setError(e.message);
             });
         return () => {
+            if (player.current?.getPlayerState() === 1) void persist();
             cancelled = true;
             clearInterval(timer);
             player.current?.destroy();

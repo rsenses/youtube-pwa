@@ -89,6 +89,7 @@ beforeEach(async () => {
     "0007_video_broadcast_status.sql",
     "0012_playlist_unimported.sql",
     "0013_exclusions.sql",
+    "0015_short_retention.sql",
     // Exercise compatibility before optional watermark backfill migration 0008.
   ]) {
     const sql = (

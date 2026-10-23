@@ -36,6 +36,7 @@ const ALL_MIGRATIONS = [
   "0010_websub_channels.sql",
   "0013_exclusions.sql",
   "0014_exclusion_websub.sql",
+  "0015_short_retention.sql",
 ];
 
 function splitSql(sql: string): string[] {
@@ -375,7 +376,7 @@ function atomFeed(
 beforeAll(async () => {
   db = (await mf.getD1Database("DB")) as unknown as D1Database;
   // Seed pre-existing eligible followers before 0010 to exercise the backfill.
-  await applyMigrations(db, ALL_MIGRATIONS.slice(0, -3));
+  await applyMigrations(db, ALL_MIGRATIONS.slice(0, -4));
   await insertAccount("pre-owner");
   await insertAccount("demo-owner", 1, "demo");
   await insertAccount("off-owner", 0);
@@ -388,6 +389,7 @@ beforeAll(async () => {
   await applyMigration(db, "0010_websub_channels.sql");
   await applyMigration(db, "0013_exclusions.sql");
   await applyMigration(db, "0014_exclusion_websub.sql");
+  await applyMigration(db, "0015_short_retention.sql");
 
   env = {
     DB: db,
@@ -703,7 +705,7 @@ describe("global daily RSS", () => {
             title: "First",
             published: firstPublished,
             extra:
-              '<media:group><media:description>Rich</media:description><media:thumbnail url="https://i.ytimg.com/vi/rssone00001/hq.jpg"/><media:community><media:statistics views="10"/></media:community><media:content duration="120"/></media:group>',
+              '<media:group><media:description>Rich</media:description><media:thumbnail url="https://i.ytimg.com/vi/rssone00001/hq.jpg"/><media:community><media:statistics views="10"/></media:community><media:content duration="240"/></media:group>',
           },
           {
             id: "recent00001",
@@ -746,7 +748,7 @@ describe("global daily RSS", () => {
       )
       .first<Record<string, unknown>>();
     expect(firstVideo?.title).toBe("First");
-    expect(firstVideo?.duration_seconds).toBe(120);
+    expect(firstVideo?.duration_seconds).toBe(240);
     expect(firstVideo?.view_count).toBe(10);
     expect(
       await db
