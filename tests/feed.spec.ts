@@ -68,7 +68,6 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
     page.getByRole("heading", { name: "Llegada first" }),
   ).toBeVisible();
   await expect.poll(() => polls).toBe(1);
-  await page.getByRole("button", { name: "Cargar más vídeos" }).click();
   await expect(page.locator(".video-card")).toHaveCount(2);
   revision = "new";
   await page.evaluate(() => {
@@ -90,7 +89,8 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
   await expect(
     page.getByRole("heading", { name: "Llegada new" }),
   ).toBeVisible();
-  await expect(page.locator(".video-card")).toHaveCount(1);
+  await expect(page.locator(".video-card")).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "Llegada first" })).toHaveCount(0);
 });
 
 function feedItem(
@@ -194,9 +194,7 @@ test("feed de 18, paginación y cabecera sin estado duplicado", async ({
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.locator(".local-badge")).toHaveCount(0);
   expect(requests.at(-1)?.searchParams.get("limit")).toBe("18");
-  await page
-    .getByRole("button", { name: "Cargar más vídeos", exact: true })
-    .click();
+  await page.locator(".load-more").scrollIntoViewIfNeeded();
   await expect(page.locator(".video-card")).toHaveCount(36);
   expect(requests.at(-1)?.searchParams.get("limit")).toBe("18");
   expect(requests.at(-1)?.searchParams.get("cursor")).toBe("next-page");
@@ -218,6 +216,31 @@ test("feed de 18, paginación y cabecera sin estado duplicado", async ({
       .boundingBox())!.y,
   ).toBeLessThan(40);
   await page.screenshot({ path: "/tmp/alveo-feed-18-desktop.png" });
+});
+
+test("la carga automática se detiene tras un error y permite reintentar", async ({ page }) => {
+  let pageRequests = 0;
+  await page.route("**/api/feed?**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has("cursor")) {
+      pageRequests++;
+      if (pageRequests === 1) return route.fulfill({ status: 503, json: { error: "Fallo temporal" } });
+      return route.fulfill({ json: { items: [feedItem("retry", "Página recuperada")], nextCursor: null } });
+    }
+    return route.fulfill({ json: {
+      items: Array.from({ length: 18 }, (_, i) => feedItem(`initial-${i}`, `Vídeo ${i}`)),
+      nextCursor: "NEXT",
+    } });
+  });
+  await page.goto("/feed");
+  await expect(page.locator(".video-card")).toHaveCount(18);
+  await expect(page.getByRole("button", { name: /Cargar más/ })).toHaveCount(0);
+  await page.locator(".load-more").scrollIntoViewIfNeeded();
+  await expect(page.locator(".load-more").getByRole("button", { name: "Reintentar" })).toBeVisible();
+  expect(pageRequests).toBe(1);
+  await page.locator(".load-more").getByRole("button", { name: "Reintentar" }).click();
+  await expect(page.getByRole("heading", { name: "Página recuperada" })).toBeVisible();
+  expect(pageRequests).toBe(2);
 });
 
 test("menú del feed permite guardar, ver canal y marcar visto", async ({ page }) => {
@@ -278,7 +301,7 @@ test("canal muestra 18 subidas y pagina vídeos antiguos", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Marcar visto", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Guardar", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Ver canal" })).toBeVisible();
-  await page.getByRole("button", { name: "Cargar más" }).click();
+  await page.locator(".load-more").scrollIntoViewIfNeeded();
   await expect(page.locator(".video-card")).toHaveCount(19);
   expect(requests[1].searchParams.get("cursor")).toBe("NEXT");
   expect(requests[1].searchParams.get("limit")).toBe("18");
@@ -323,7 +346,7 @@ test("selector de tipos, etiquetas y paginación", async ({ page }) => {
           percent: 40,
         }),
       );
-    await route.fulfill({ json: { items, nextCursor: "next-page" } });
+    await route.fulfill({ json: { items: url.searchParams.has("cursor") ? [] : items, nextCursor: url.searchParams.has("cursor") ? null : "next-page" } });
   });
 
   await page.goto("/feed");
@@ -348,9 +371,6 @@ test("selector de tipos, etiquetas y paginación", async ({ page }) => {
   await expectNoOverlap(liveTag, liveCard.locator(".duration"));
   await expectNoOverlap(liveTag, liveCard.locator(".watched-label"));
 
-  await page
-    .getByRole("button", { name: "Cargar más vídeos", exact: true })
-    .click();
   await expect
     .poll(() => requests.at(-1)?.searchParams.get("cursor"))
     .toBe("next-page");
@@ -418,16 +438,13 @@ test("descarta paginación tardía al cambiar tipos", async ({ page }) => {
       },
     });
   });
+  const requested = page.waitForRequest((r) =>
+    new URL(r.url()).searchParams.has("cursor"),
+  );
   await page.goto("/feed");
   await expect(
     page.getByRole("heading", { name: "Filtro inicial" }),
   ).toBeVisible();
-  const requested = page.waitForRequest((r) =>
-    new URL(r.url()).searchParams.has("cursor"),
-  );
-  await page
-    .getByRole("button", { name: "Cargar más vídeos", exact: true })
-    .click();
   await requested;
   await page.getByRole("button", { name: "Shorts", exact: true }).click();
   await expect(

@@ -35,10 +35,8 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
   await expect(input).toBeFocused();
   await input.fill("old film");
   await page.getByRole("button", { name: "Buscar", exact: true }).click();
-  await expect(page.locator(".search-result .video-card")).toHaveCount(1);
-  await expect(page.locator(".search-result").getByRole("button", { name: "Marcar visto" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Cargar más" }).click();
   await expect(page.locator(".search-result .video-card")).toHaveCount(2);
+  await expect(page.locator(".search-result").getByRole("button", { name: "Marcar visto" })).toHaveCount(0);
   await page.getByRole("button", { name: "Guardar Primer vídeo en una lista" }).click();
   await page.getByRole("button", { name: /Favoritos/ }).click();
   expect(saved).toEqual(["search00001"]);
@@ -560,15 +558,12 @@ test("public comments, replies, paging, avatar fallback and related provenance",
     .getByRole("button", { name: "Cargar comentarios", exact: true })
     .click();
   await expect(page.getByText("A public comment fixture")).toBeVisible();
-  expect(commentRequests).toBe(1);
+  await expect.poll(() => commentRequests).toBe(2);
   const parent = page.locator(".comments-section>.comment").first();
   await expect(parent.locator(":scope>.comment-avatar")).toHaveText("A");
   await parent.getByRole("button", { name: "Ver 1 respuestas" }).click();
   await expect(parent.getByText("Reply fixture")).toBeVisible();
-  await page
-    .locator(".comments-section")
-    .getByRole("button", { name: "Cargar más", exact: true })
-    .click();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await expect(page.getByText("Second-page comment fixture")).toBeVisible();
   expect(suggestionRequests).toBe(0);
   await page

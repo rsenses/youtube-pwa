@@ -580,6 +580,40 @@ function PageHeading({
     </div>
   );
 }
+function LoadMore({ cursor, busy, error, onLoad }: {
+  cursor: string | null;
+  busy: boolean;
+  error?: string;
+  onLoad: () => void;
+}) {
+  const marker = useRef<HTMLDivElement>(null);
+  const load = useRef(onLoad);
+  const requested = useRef<string | null>(null);
+  load.current = onLoad;
+  useEffect(() => {
+    if (!cursor) {
+      requested.current = null;
+      return;
+    }
+    if (busy || error || requested.current === cursor || !marker.current) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      requested.current = cursor;
+      observer.disconnect();
+      load.current();
+    }, { rootMargin: "320px 0px" });
+    observer.observe(marker.current);
+    return () => observer.disconnect();
+  }, [cursor, busy, error]);
+  if (!cursor) return null;
+  return <div className="load-more" ref={marker}>
+    {busy && <span role="status">Cargando más…</span>}
+    {error && <State error>{error} <button onClick={() => {
+      requested.current = cursor;
+      load.current();
+    }}>Reintentar</button></State>}
+  </div>;
+}
 function SyncButton({ onDone, type = "subscriptions", label = "Actualizar" }: { onDone?: (job?: SyncJob) => void; type?: "subscriptions" | "rss"; label?: string } = {}) {
   const { notify, session } = useApp();
   const mounted = useRef(false);
@@ -764,8 +798,10 @@ function Feed() {
     setSearch(s);
   }
   async function more() {
+    if (!cursor || busy) return;
     const generation = loadGeneration.current;
     setBusy(true);
+    setError("");
     try {
       const d = await api<{ items: Video[]; nextCursor: string | null }>(
         `/api/feed?${query}&cursor=${encodeURIComponent(cursor!)}`,
@@ -931,7 +967,7 @@ function Feed() {
             </button>
           </div>
         )}
-        {error && (
+        {error && !cursor && (
           <State error>
             {error}{" "}
             <button onClick={() => setVersion((v) => v + 1)}>Reintentar</button>
@@ -987,13 +1023,7 @@ function Feed() {
             )}
           </div>
         )}
-        {cursor && !busy && (
-          <div className="load-more">
-            <button className="button secondary" onClick={more}>
-              Cargar más vídeos <Icon name="plus" size={17} />
-            </button>
-          </div>
-        )}
+        <LoadMore cursor={cursor} busy={busy} error={error} onLoad={() => void more()} />
       </section>
     </>
   );
@@ -1204,16 +1234,33 @@ function ChannelVideos({ id }: { id: string }) {
   const [extra, setExtra] = useState<Video[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
+    [moreError, setMoreError] = useState(""),
     [updates, setUpdates] = useState<Record<string, Video>>({});
   const { data, error, loading } = useResource<{
     items: Video[];
     nextCursor: string | null;
   }>(`/api/channels/${id}/videos?limit=18`);
-  const { notify } = useApp();
   useEffect(() => {
     setExtra([]);
     setCursor(data?.nextCursor || null);
+    setMoreError("");
   }, [data]);
+  async function more() {
+    if (!cursor || busy) return;
+    setBusy(true);
+    setMoreError("");
+    try {
+      const d = await api<{ items: Video[]; nextCursor: string | null }>(
+        `/api/channels/${id}/videos?limit=18&cursor=${encodeURIComponent(cursor)}`,
+      );
+      setExtra((x) => [...x, ...d.items]);
+      setCursor(d.nextCursor);
+    } catch (e) {
+      setMoreError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <>
       {error && <State error>{error}</State>}
@@ -1230,31 +1277,7 @@ function ChannelVideos({ id }: { id: string }) {
       {data && !data.items.length && (
         <State>Este canal aún no tiene vídeos en la biblioteca.</State>
       )}
-      {cursor && (
-        <button
-          className="button secondary"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const d = await api<{
-                items: Video[];
-                nextCursor: string | null;
-              }>(
-                `/api/channels/${id}/videos?limit=18&cursor=${encodeURIComponent(cursor)}`,
-              );
-              setExtra((x) => [...x, ...d.items]);
-              setCursor(d.nextCursor);
-            } catch (e) {
-              notify((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? "Cargando…" : "Cargar más"}
-        </button>
-      )}
+      <LoadMore cursor={cursor} busy={busy} error={moreError} onLoad={() => void more()} />
     </>
   );
 }
@@ -1956,13 +1979,13 @@ function SearchPage() {
       <button className="button small" disabled={draft.trim().length < 2 || busy}>Buscar</button>
     </form>
     {!query && <State>Escribe lo que buscas y pulsa Buscar.</State>}
-    {error && <State error>{error} <button onClick={() => setVersion((n) => n + 1)}>Reintentar</button></State>}
+    {error && !cursor && <State error>{error} <button onClick={() => setVersion((n) => n + 1)}>Reintentar</button></State>}
     <div className="video-grid">
       {items.map((video) => <SearchVideoCard key={video.id} video={video} />)}
     </div>
-    {busy && <State>Buscando vídeos…</State>}
+    {busy && !items.length && <State>Buscando vídeos…</State>}
     {query && !busy && !error && !items.length && <State>No encontramos vídeos para «{query}».</State>}
-    {cursor && <button className="button secondary load-more" disabled={busy} onClick={() => void more()}>Cargar más</button>}
+    <LoadMore cursor={cursor} busy={busy} error={error} onLoad={() => void more()} />
   </>;
 }
 function SearchVideoCard({ video }: { video: Video }) {
@@ -2033,6 +2056,22 @@ function Comments({
     setItems(data?.items || []);
     setCursor(data?.nextCursor || null);
   }, [data]);
+  async function more() {
+    if (!cursor || busy) return;
+    setBusy(true);
+    setExtraError("");
+    try {
+      const d = await api<CommentPage>(
+        `${path}?cursor=${encodeURIComponent(cursor)}`,
+      );
+      setItems((v) => [...v, ...d.items]);
+      setCursor(d.nextCursor);
+    } catch (e) {
+      setExtraError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <>
       {loading && <State>Cargando comentarios…</State>}
@@ -2048,30 +2087,7 @@ function Comments({
       {items.map((c) => (
         <Comment key={c.id} comment={c} />
       ))}
-      {extraError && <State error>{extraError}</State>}
-      {cursor && (
-        <button
-          className="button small secondary"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const d = await api<CommentPage>(
-                `${path}?cursor=${encodeURIComponent(cursor)}`,
-              );
-              setItems((v) => [...v, ...d.items]);
-              setCursor(d.nextCursor);
-              setExtraError("");
-            } catch (e) {
-              setExtraError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          Cargar más
-        </button>
-      )}
+      <LoadMore cursor={cursor} busy={busy} error={extraError} onLoad={() => void more()} />
     </>
   );
 }

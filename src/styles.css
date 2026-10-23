@@ -875,6 +875,7 @@ label > textarea {
 .load-more {
     display: flex;
     justify-content: center;
+    min-height: 1px;
     margin: 24px 0;
 }
 .page-footer {
