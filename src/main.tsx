@@ -983,7 +983,7 @@ function Channels() {
     [excluded, setExcluded] = useState(false),
     [version, setVersion] = useState(0),
     [newId, setNewId] = useState("");
-  const { data, error, loading } = useResource<{ items: Channel[] }>(
+  const { data, setData, error, loading } = useResource<{ items: Channel[] }>(
     `/api/channels?excluded=${excluded}`,
     version,
   );
@@ -1005,7 +1005,10 @@ function Channels() {
   async function setExclusion(c: Channel) {
     try {
       await api(`/api/channels/${c.id}/exclusion`, "PATCH", { excluded: !c.excluded });
-      setVersion((v) => v + 1);
+      setData((current) => current && {
+        ...current,
+        items: current.items.filter((item) => item.id !== c.id),
+      });
       notify(c.excluded ? "Canal incluido" : "Canal excluido de la aplicación");
     } catch (e) { notify((e as Error).message); }
   }
@@ -1247,7 +1250,7 @@ function Playlists() {
     [open, setOpen] = useState(false),
     [excluded, setExcluded] = useState(false),
     [q, setQ] = useState("");
-  const { data, error, loading } = useResource<{ items: PlaylistSummary[] }>(
+  const { data, setData, error, loading } = useResource<{ items: PlaylistSummary[] }>(
     `/api/playlists?excluded=${excluded}`,
     version,
   );
@@ -1255,7 +1258,10 @@ function Playlists() {
   async function setExclusion(p: PlaylistSummary) {
     try {
       await api(`/api/playlists/${p.id}/exclusion`, "PATCH", { excluded: !p.excluded });
-      setVersion((v) => v + 1);
+      setData((current) => current && {
+        ...current,
+        items: current.items.filter((item) => item.id !== p.id),
+      });
       notify(p.excluded ? "Lista incluida" : "Lista excluida de la aplicación");
     } catch (e) { notify((e as Error).message); }
   }

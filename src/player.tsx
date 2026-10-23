@@ -144,8 +144,8 @@ export function Player({
                     height: "100%",
                     playerVars: {
                         playsinline: 1,
-                        controls: 1,
-                        fs: 1,
+                        iv_load_policy: 3,
+                        rel: 0,
                         origin: window.location.origin,
                         start: Math.floor(position.current),
                     },

@@ -33,6 +33,39 @@ test("suscripción desde vídeo respeta permisos y evita repetir la escritura", 
   expect(requests).toBe(1);
 });
 
+test("excluir al final de canales o listas conserva la posición", async ({ page }) => {
+  for (const kind of ["channels", "playlists"] as const) {
+    const items = Array.from({ length: 120 }, (_, index) => ({
+      id: `${kind}-${index}`,
+      title: `Elemento ${String(index).padStart(3, "0")}`,
+      description: "Descripción",
+      ...(kind === "channels"
+        ? { thumbnailUrl: "", subscribed: true, excluded: false }
+        : { source: "local", itemCount: 0, excluded: false }),
+    }));
+    let reads = 0;
+    await page.route(new RegExp(`/api/${kind}\\?excluded=false$`), (route) => {
+      reads++;
+      return route.fulfill({ json: { items } });
+    });
+    await page.route(new RegExp(`/api/${kind}/[^/]+/exclusion$`), (route) =>
+      route.fulfill({ json: { excluded: true } }),
+    );
+    await page.goto(`/${kind}`);
+    const cards = page.locator(kind === "channels" ? ".channel-card" : ".playlist-card");
+    await expect(cards).toHaveCount(120);
+    const target = cards.nth(99);
+    await target.scrollIntoViewIfNeeded();
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before).toBeGreaterThan(1000);
+    await target.getByRole("button", { name: "Excluir de la aplicación" }).click();
+    await expect(cards).toHaveCount(119);
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(before - 500);
+    expect(reads).toBe(1);
+    await page.unrouteAll();
+  }
+});
+
 test("navegación, listas persistentes, ajustes y errores de escritura", async ({
   page,
 }) => {
@@ -176,6 +209,10 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   expect(apiLoads).toBeGreaterThan(0);
   const iframe = page.locator(".youtube-host iframe");
   await expect(iframe).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__mock.player.opts.playerVars)).toMatchObject({
+    iv_load_policy: 3,
+    rel: 0,
+  });
   expect(await page.evaluate(() => (window as any).__mock.playCalls || 0)).toBe(
     0,
   );
