@@ -1307,12 +1307,14 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
           }
         }}
       >
-        {id && <Icon name="sync" size={18} />}
+        <Icon name="sync" size={18} />
         {id ? "Actualizar desde YouTube" : "Actualizar catálogo de YouTube"}
       </button>
       {job && (
         <small role="status">
-          {syncJobStatusLabel(job.status)}
+          {job.status === "success"
+            ? `Última actualización ${id ? "de la lista" : "del catálogo"}: completada`
+            : syncJobStatusLabel(job.status)}
           {job.status === "error" && job.message ? `: ${job.message}` : ""}
         </small>
       )}
