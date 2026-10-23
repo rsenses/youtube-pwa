@@ -580,7 +580,7 @@ function PageHeading({
     </div>
   );
 }
-function SyncButton({ onDone, type = "subscriptions", label = "Actualizar canales" }: { onDone?: (job?: SyncJob) => void; type?: "subscriptions" | "rss"; label?: string } = {}) {
+function SyncButton({ onDone, type = "subscriptions", label = "Actualizar" }: { onDone?: (job?: SyncJob) => void; type?: "subscriptions" | "rss"; label?: string } = {}) {
   const { notify, session } = useApp();
   const mounted = useRef(false);
   useEffect(() => {
@@ -1308,15 +1308,10 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
         }}
       >
         <Icon name="sync" size={18} />
-        {id ? "Actualizar desde YouTube" : "Actualizar catálogo de YouTube"}
+        Actualizar
       </button>
-      {job && (
-        <small role="status">
-          {job.status === "success"
-            ? `Última actualización ${id ? "de la lista" : "del catálogo"}: completada`
-            : syncJobStatusLabel(job.status)}
-          {job.status === "error" && job.message ? `: ${job.message}` : ""}
-        </small>
+      {job?.status === "error" && (
+        <small role="alert">Error al actualizar{job.message ? `: ${job.message}` : ""}</small>
       )}
       {(failure || error) && <small role="alert">{failure || error}</small>}
     </div>
@@ -1347,12 +1342,15 @@ function Playlists() {
     <>
       <PageHeading
         title="Listas"
-        action={
+        action={<div className="playlist-heading-actions">
+          {session.mode === "real" && session.connected && !excluded && (
+            <RemoteListSync onDone={() => setVersion((v) => v + 1)} />
+          )}
           <button className="button" onClick={() => setOpen(!open)}>
             <Icon name="plus" size={18} />
             Nueva lista
           </button>
-        }
+        </div>}
       />
       <div className="search-input">
         <Icon name="search" size={20} />
@@ -1405,9 +1403,6 @@ function Playlists() {
       </div>
       {data && !visiblePlaylists.length && (
         <State>{q ? "No hay listas que coincidan con la búsqueda." : excluded ? "No hay listas excluidas." : "Crea tu primera lista o actualiza el catálogo de YouTube."}</State>
-      )}
-      {session.mode === "real" && session.connected && !excluded && (
-        <div className="catalog-sync"><RemoteListSync onDone={() => setVersion((v) => v + 1)} /></div>
       )}
     </>
   );
@@ -1571,7 +1566,6 @@ function PlaylistPage() {
                           "DELETE",
                         );
                         setVersion((x) => x + 1);
-                        notify("Vídeo retirado de la lista");
                       } catch (e) {
                         notify((e as Error).message);
                       }

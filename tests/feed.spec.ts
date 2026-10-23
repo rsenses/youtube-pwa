@@ -8,14 +8,14 @@ test("actualizar suscripciones se ofrece en Canales, no en Feed", async ({
     page.getByRole("heading", { name: "Feed", exact: true, level: 1 }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Actualizar canales", exact: true }),
+    page.getByRole("button", { name: "Actualizar", exact: true }),
   ).toHaveCount(0);
   await page.goto("/channels");
   await expect(
     page.getByRole("heading", { name: "Canales", exact: true, level: 1 }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Actualizar canales", exact: true }),
+    page.getByRole("button", { name: "Actualizar", exact: true }),
   ).toBeVisible();
 });
 

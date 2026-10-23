@@ -1,6 +1,29 @@
 import { test, expect } from "@playwright/test";
 
 const now = "2026-10-20T10:00:00.000Z";
+test("el catálogo se actualiza desde la cabecera y solo muestra errores", async ({ page }) => {
+  await page.route(/\/api\/session$/, async (route) => {
+    const res = await route.fetch();
+    const data = await res.json();
+    await route.fulfill({ json: { ...data, mode: "real", connected: true } });
+  });
+  await page.route(/\/api\/playlists\?/, (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  let status = "success";
+  await page.route(/\/api\/sync\/status$/, (route) =>
+    route.fulfill({ json: { runs: [], jobs: [queuedJob({ type: "playlists", playlistId: null, status, message: status === "error" ? "Falló YouTube" : null })] } }),
+  );
+  await page.goto("/playlists");
+  const heading = page.locator(".page-heading");
+  await expect(heading.getByRole("button", { name: "Actualizar", exact: true })).toBeVisible();
+  await expect(heading.getByRole("button", { name: "Nueva lista" })).toBeVisible();
+  await expect(heading.getByRole("status")).toHaveCount(0);
+  status = "error";
+  await page.reload();
+  await expect(heading.getByRole("alert")).toHaveText("Error al actualizar: Falló YouTube");
+});
+
 test("actualiza solo la lista seleccionada y no ofrece sincronización externa para listas locales", async ({
   page,
 }) => {
@@ -55,7 +78,7 @@ test("actualiza solo la lista seleccionada y no ofrece sincronización externa p
     });
   });
   await page.goto("/playlists/manual-list");
-  await page.getByRole("button", { name: "Actualizar desde YouTube" }).click();
+  await page.getByRole("button", { name: "Actualizar", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Lista actualizada" }),
   ).toBeVisible();
@@ -83,7 +106,7 @@ test("actualiza solo la lista seleccionada y no ofrece sincronización externa p
     page.getByRole("heading", { name: "Lista local" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Actualizar desde YouTube" }),
+    page.getByRole("button", { name: "Actualizar", exact: true }),
   ).toHaveCount(0);
 });
 
