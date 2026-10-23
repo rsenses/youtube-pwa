@@ -927,6 +927,9 @@ label > textarea {
     transform: translateX(-50%);
     animation: toast-in 0.18s ease-out;
 }
+.app-shell:has(.mini-player) .toast {
+    bottom: 108px;
+}
 .toast button {
     display: flex;
     align-items: center;
@@ -1558,12 +1561,82 @@ label > textarea {
 .watch-related .video-card {
     margin-bottom: 12px;
 }
-.related-note {
-    padding-top: 12px;
+.page-main.has-mini-player {
+    padding-bottom: 128px;
+}
+.mini-player {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 232px;
+    z-index: 25;
+    display: block;
+    padding: 0;
     border-top: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 -4px 20px rgb(0 0 0 / 8%);
+}
+.mini-player .watch-primary {
+    display: flex;
+    align-items: center;
+    min-height: 96px;
+}
+.mini-player .player-section {
+    width: 170px;
+    flex: 0 0 170px;
+    pointer-events: none;
+}
+.mini-player .player-viewport {
+    border-radius: 0;
+}
+.mini-player .player-notice,
+.mini-player .watch-details,
+.mini-player .watch-related {
+    display: none;
+}
+.mini-player-controls {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    height: 96px;
+}
+.mini-player-return {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    height: 100%;
+    padding: 8px 16px;
+}
+.mini-player-return::before {
+    position: absolute;
+    inset: 0 52px 0 0;
+    content: "";
+}
+.mini-player-title,
+.mini-player-channel {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mini-player-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+.mini-player-channel {
+    margin-top: 4px;
     color: var(--muted);
     font-size: 12px;
-    line-height: 1.5;
+}
+.mini-player-close {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    flex: 0 0 52px;
+    height: 52px;
 }
 .save-panel {
     margin-top: 12px;
@@ -1687,6 +1760,9 @@ label > textarea {
     }
 }
 @media (max-width: 1180px) {
+    .mini-player {
+        left: 216px;
+    }
     .sidebar {
         width: 216px;
         padding: 12px 10px;
@@ -1720,6 +1796,29 @@ label > textarea {
     }
 }
 @media (max-width: 700px) {
+    .app-shell:has(.mini-player) .toast {
+        bottom: calc(152px + env(safe-area-inset-bottom));
+    }
+    .mini-player {
+        left: 0;
+        bottom: calc(64px + env(safe-area-inset-bottom));
+        z-index: 31;
+    }
+    .mini-player .watch-primary,
+    .mini-player-controls {
+        min-height: 76px;
+        height: 76px;
+    }
+    .mini-player .player-section {
+        width: 135px;
+        flex-basis: 135px;
+    }
+    .mini-player-return {
+        padding: 8px 10px;
+    }
+    .page-main.has-mini-player {
+        padding-bottom: calc(160px + env(safe-area-inset-bottom));
+    }
     .sidebar {
         display: none;
     }

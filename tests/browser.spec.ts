@@ -67,7 +67,7 @@ test("suscripción desde vídeo respeta permisos y evita repetir la escritura", 
   writes = true;
   await page.reload();
   await page.getByRole("button", { name: "Suscribirse", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Suscrito", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Suscribirse", exact: true })).toHaveCount(0);
   expect(requests).toBe(1);
 });
 
@@ -306,6 +306,32 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   await expect(
     page.getByRole("button", { name: "Visto", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Cerrar aviso" }).click();
+  await page.evaluate(() => {
+    (window as any).__shared = [];
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: async (data: ShareData) => (window as any).__shared.push(data.url),
+    });
+  });
+  await page.getByRole("button", { name: "Compartir vídeo" }).click();
+  expect(await page.evaluate(() => (window as any).__shared)).toEqual([
+    "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+  ]);
+  await page.locator(".bottom-nav").getByRole("link", { name: "Feed" }).click();
+  await expect(page.locator(".mini-player")).toBeVisible();
+  await page.screenshot({ path: "/tmp/alveo-mini-player-mobile.png" });
+  expect(await iframe.evaluate((el, original) => el === original, identity)).toBe(true);
+  expect(await page.evaluate(() => (window as any).__mock.destroys)).toBe(0);
+  await expect(page.locator(".mini-player")).toHaveCSS("bottom", "64px");
+  await page.getByRole("link", { name: /Volver al vídeo:/ }).click();
+  await expect(page.locator(".mini-player")).toHaveCount(0);
+  expect(await iframe.evaluate((el, original) => el === original, identity)).toBe(true);
+  await page.locator(".bottom-nav").getByRole("link", { name: "Buscar" }).click();
+  await page.getByRole("button", { name: "Cerrar reproducción" }).click();
+  await expect(page.locator(".youtube-host iframe")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__mock.destroys)).toBe(1);
+  await page.goto("/watch/M7lc1UVf-VE");
   await page.reload();
   await expect(
     page.getByRole("button", { name: "Visto", exact: true }),

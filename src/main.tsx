@@ -352,6 +352,16 @@ function App() {
     [error, errorSet] = useState(""),
     [toast, toastSet] = useState("");
   const location = useLocation();
+  const watchId = location.pathname.match(/^\/watch\/([^/]+)$/)?.[1];
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(
+    watchId ?? null,
+  );
+  useEffect(() => {
+    if (watchId) setActiveVideoId(watchId);
+  }, [watchId]);
+  useEffect(() => {
+    if (session?.mode === "real" && !session.connected) setActiveVideoId(null);
+  }, [session?.mode, session?.connected]);
   const refreshSession = useCallback(async () => {
     const s = await api<SessionInfo>("/api/session");
     setSession(s);
@@ -467,8 +477,16 @@ function App() {
           </header>
           <main
             id="main-content"
-            className={watching ? "watch-main" : "page-main"}
+            className={`${watching ? "watch-main" : "page-main"} ${activeVideoId && !watching ? "has-mini-player" : ""}`}
           >
+            {activeVideoId && (
+              <Watch
+                key={activeVideoId}
+                id={activeVideoId}
+                minimized={!watching || watchId !== activeVideoId}
+                onClose={() => setActiveVideoId(null)}
+              />
+            )}
             {session.mode === "real" &&
             !session.connected &&
             location.pathname !== "/settings" ? (
@@ -483,7 +501,7 @@ function App() {
                 <Route path="/playlists" element={<Playlists />} />
                 <Route path="/playlists/:id" element={<PlaylistPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/watch/:id" element={<WatchRoute />} />
+                <Route path="/watch/:id" element={null} />
                 <Route
                   path="*"
                   element={
@@ -1522,6 +1540,7 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
   const [subscribed, setSubscribed] = useState(false);
   const following =
     subscribed || !!data?.items.some((c) => c.id === channelId && c.subscribed);
+  if (loading || following) return null;
   if (error)
     return (
       <small role="alert" className="error-text">
@@ -1541,8 +1560,8 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
     );
   return (
     <button
-      className={`button small ${following ? "secondary" : ""}`}
-      disabled={loading || busy || following}
+      className="button small"
+      disabled={busy}
       onClick={async () => {
         setBusy(true);
         try {
@@ -1560,22 +1579,20 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
         }
       }}
     >
-      <Icon name={following ? "check" : "plus"} size={16} />
-      {loading
-        ? "Cargando…"
-        : following
-          ? "Suscrito"
-          : busy
-            ? "Suscribiendo…"
-            : "Suscribirse"}
+      <Icon name="plus" size={16} />
+      {busy ? "Suscribiendo…" : "Suscribirse"}
     </button>
   );
 }
-function WatchRoute() {
-  const { id } = useParams();
-  return <Watch key={id} id={id!} />;
-}
-function Watch({ id }: { id: string }) {
+function Watch({
+  id,
+  minimized,
+  onClose,
+}: {
+  id: string;
+  minimized: boolean;
+  onClose: () => void;
+}) {
   const {
     data: video,
     setData: setVideo,
@@ -1606,7 +1623,7 @@ function Watch({ id }: { id: string }) {
   useEffect(() => {
     if (video) revisionRef.current = video.revision ?? 0;
   }, [video]);
-  if (loading) return <State>Cargando vídeo…</State>;
+  if (loading) return minimized ? null : <State>Cargando vídeo…</State>;
   if (error || !video)
     return (
       <State error>
@@ -1614,7 +1631,7 @@ function Watch({ id }: { id: string }) {
       </State>
     );
   return (
-    <div className="watch-layout">
+    <div className={`watch-layout ${minimized ? "mini-player" : ""}`}>
       <div className="watch-primary">
         <Player
           video={video}
@@ -1622,6 +1639,26 @@ function Watch({ id }: { id: string }) {
           revisionRef={revisionRef}
           demo={session.mode === "demo"}
         />
+        {minimized && (
+          <div className="mini-player-controls">
+            <Link
+              to={`/watch/${id}`}
+              className="mini-player-return"
+              aria-label={`Volver al vídeo: ${video.title}`}
+            >
+              <span className="mini-player-title">{video.title}</span>
+              <span className="mini-player-channel">{video.channelTitle}</span>
+            </Link>
+            <button
+              className="mini-player-close"
+              aria-label="Cerrar reproducción"
+              title="Cerrar reproducción"
+              onClick={onClose}
+            >
+              <Icon name="close" size={22} />
+            </button>
+          </div>
+        )}
         <div className="watch-details">
           <h1>{video.title}</h1>
           <div className="watch-channel">
@@ -1640,11 +1677,11 @@ function Watch({ id }: { id: string }) {
                 </small>
               </div>
             </Link>
-            <SubscribeChannel
-              key={video.channelId}
-              channelId={video.channelId}
-            />
             <div className="watch-actions">
+              <SubscribeChannel
+                key={video.channelId}
+                channelId={video.channelId}
+              />
               {!video.transient && <button
                 className={`button small ${video.watched ? "" : "secondary"}`}
                 onClick={async () => {
@@ -1674,6 +1711,30 @@ function Watch({ id }: { id: string }) {
               >
                 <Icon name="save" size={16} />
                 Guardar
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Compartir vídeo"
+                title="Compartir vídeo"
+                onClick={async () => {
+                  const url = `https://www.youtube.com/watch?v=${id}`;
+                  try {
+                    if (navigator.share) {
+                      await navigator.share({ url });
+                      return;
+                    }
+                  } catch (e) {
+                    if ((e as DOMException).name === "AbortError") return;
+                  }
+                  try {
+                    await navigator.clipboard.writeText(url);
+                    notify("Enlace copiado");
+                  } catch {
+                    notify("No se pudo compartir el vídeo");
+                  }
+                }}
+              >
+                <Icon name="share" size={18} />
               </button>
               <a
                 className="icon-button"
@@ -1770,13 +1831,6 @@ function Watch({ id }: { id: string }) {
           !suggestions?.items.length && (
             <p className="muted-note">Sin más vídeos conocidos por ahora.</p>
           )}
-        {related && (
-          <p className="related-note">
-            {session.capabilities.publicData
-              ? "Por etiquetas o título. Solo al pedirlo."
-              : "Solo contenido de tu biblioteca."}
-          </p>
-        )}
       </aside>
     </div>
   );

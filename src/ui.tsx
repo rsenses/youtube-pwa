@@ -39,6 +39,12 @@ export function Icon({ name, size = 22 }: { name: string; size?: number }) {
                 <path d="M11 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6" />
             </>
         ),
+        share: (
+            <>
+                <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+                <path d="M5 13v7h14v-7" />
+            </>
+        ),
         search: (
             <>
                 <circle cx="10" cy="10" r="6" />
