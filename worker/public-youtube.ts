@@ -3,6 +3,7 @@ import type { Env, Video } from "./types";
 import { isWebSubEnabled } from "./websub";
 import { isRecentEnough } from "./rss";
 import { relatedQueries } from "./related-query";
+import { videoType } from "../shared/video-type";
 import {
   ExternalError,
   HttpError,
@@ -395,7 +396,7 @@ export async function searchPublicVideos(
   pageToken?: string,
 ): Promise<{ items: Video[]; nextPageToken: string | null }> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${query.toLocaleLowerCase()}\n${pageToken || ""}`));
-  const key = `youtube-search:v1:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  const key = `youtube-search:v2:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   if (env.READ_CACHE) {
     try {
       const raw = await env.READ_CACHE.get(key);
@@ -425,7 +426,7 @@ export async function searchPublicVideos(
   if (!Array.isArray(details.items)) throw new ExternalError("invalid_response");
   const byId = new Map(details.items.map((item) => [item.id, publicPreview(item)]));
   const value = {
-    items: ids.map((id) => byId.get(id)).filter((item): item is Video => item != null),
+    items: ids.map((id) => byId.get(id)).filter((item): item is Video => item != null && videoType(item) !== "short"),
     nextPageToken: typeof results.nextPageToken === "string" ? results.nextPageToken : null,
   };
   try {

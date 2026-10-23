@@ -217,6 +217,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
   it("searches old public videos across pages without creating D1 rows and reuses KV results", async () => {
     const firstId = "search00001";
     const secondId = "search00002";
+    const shortId = "short000001";
     const channelId = "UC" + "s".repeat(22);
     const calls: string[] = [];
     const kv = new Map<string, string>();
@@ -233,18 +234,20 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         expect(url.searchParams.get("maxResults")).toBe("20");
         expect(url.searchParams.has("publishedAfter")).toBe(false);
         return Response.json({
-          items: [{ id: { videoId: url.searchParams.has("pageToken") ? secondId : firstId } }],
+          items: url.searchParams.has("pageToken")
+            ? [{ id: { videoId: secondId } }]
+            : [{ id: { videoId: firstId } }, { id: { videoId: shortId } }],
           nextPageToken: url.searchParams.has("pageToken") ? undefined : "NEXT",
         });
       }
-      if (url.pathname.endsWith("/videos")) return Response.json({ items: [{
-        id: url.searchParams.get("id"),
+      if (url.pathname.endsWith("/videos")) return Response.json({ items: url.searchParams.get("id")!.split(",").map((id) => ({
+        id,
         snippet: { title: "Old film", description: "Archived", channelId,
           channelTitle: "Archive", publishedAt: "2020-01-01T00:00:00Z",
           liveBroadcastContent: "none" },
         status: { privacyStatus: "public", embeddable: true },
-        contentDetails: { duration: "PT2M" },
-      }] });
+        contentDetails: { duration: id === shortId ? "PT2M" : "PT4M" },
+      })) });
       throw new Error("Unexpected endpoint");
     }));
     try {
@@ -257,7 +260,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       expect(calls).toHaveLength(callCount);
       const second = await searchPublicVideos(env, "old film", "NEXT");
       expect(second.items.map((item) => item.id)).toEqual([secondId]);
-      for (const id of [firstId, secondId]) expect(await env.DB.prepare(
+      for (const id of [firstId, secondId, shortId]) expect(await env.DB.prepare(
         "SELECT id FROM videos WHERE id=?",
       ).bind(id).first()).toBeNull();
     } finally {
