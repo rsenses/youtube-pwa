@@ -162,6 +162,16 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       "SELECT video_id, watched FROM watch_states WHERE account_id=? AND video_id IN (?,?,?)",
     ).bind(account.id, olderId, newerId, otherVideoId).all<{ video_id: string; watched: number }>();
     expect(states.results).toEqual([{ video_id: olderId, watched: 1 }]);
+    expect(await bulkWatchState(env.DB, account.id, {
+      scope: "channel", channelId: selectedId, before: null, watched: true,
+    })).toBe(1);
+    expect(await bulkWatchState(env.DB, account.id, {
+      scope: "channel", channelId: selectedId, before: null, watched: true,
+    })).toBe(0);
+    const allStates = await env.DB.prepare(
+      "SELECT video_id FROM watch_states WHERE account_id=? AND video_id IN (?,?,?) ORDER BY video_id",
+    ).bind(account.id, olderId, newerId, otherVideoId).all<{ video_id: string }>();
+    expect(allStates.results.map((row) => row.video_id)).toEqual([newerId, olderId]);
   });
   it("pages old channel uploads from YouTube without importing them and preserves personal state", async () => {
     const channelId = "UC" + "h".repeat(22);

@@ -517,11 +517,6 @@ label > textarea {
     color: var(--text);
     box-shadow: var(--shadow);
 }
-.filter-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
 .video-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1939,9 +1934,6 @@ label > textarea {
         min-height: 44px;
         padding: 0 8px;
         font-size: 13px;
-    }
-    .filter-actions {
-        width: 100%;
     }
     .bulk-panel {
         flex-direction: column;

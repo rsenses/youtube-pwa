@@ -713,9 +713,8 @@ function Feed() {
     [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
-    [version, setVersion] = useState(0),
-    [bulk, setBulk] = useState(false);
-  const { notify, session } = useApp();
+    [version, setVersion] = useState(0);
+  const { session } = useApp();
   const loadGeneration = useRef(0);
   const loadedQuery = useRef<string | null>(null);
   useEffect(() => {
@@ -833,18 +832,6 @@ function Feed() {
     value ? s.set(key, value) : s.delete(key);
     setSearch(s);
   }
-  async function mark() {
-    setBusy(true);
-    try {
-      await api("/api/watch-state/bulk", "POST", { scope: "all" });
-      notify("Vídeos marcados como vistos");
-      setVersion((v) => v + 1);
-      setBulk(false);
-    } catch (e) {
-      notify((e as Error).message);
-      setBusy(false);
-    }
-  }
   return (
     <>
       <PageHeading title="Feed" />
@@ -894,29 +881,7 @@ function Feed() {
               ))}
             </div>
           </div>
-          <div className="filter-actions">
-            <button
-              className={`icon-button ${bulk ? "active" : ""}`}
-              aria-label="Opciones de marcado masivo"
-              aria-expanded={bulk}
-              onClick={() => setBulk(!bulk)}
-            >
-              <Icon name="more" />
-            </button>
-          </div>
         </div>
-        {bulk && (
-          <div className="bulk-panel">
-            <span>Marcar vídeos</span>
-            <button
-              className="button small secondary"
-              disabled={busy}
-              onClick={() => void mark()}
-            >
-              Marcar todos como vistos
-            </button>
-          </div>
-        )}
         {error && !cursor && (
           <State error>
             {error}{" "}
@@ -1168,7 +1133,7 @@ type ChannelVideoPage = {
 };
 function ChannelPageContent({ id }: { id: string }) {
   const { session, notify } = useApp();
-  const [dateOpen, setDateOpen] = useState(false);
+  const [markOpen, setMarkOpen] = useState(false);
   const [before, setBefore] = useState("");
   const [marking, setMarking] = useState(false);
   const [version, setVersion] = useState(0);
@@ -1179,19 +1144,21 @@ function ChannelPageContent({ id }: { id: string }) {
   );
   const savedChannel = channels?.items.find((c) => c.id === id);
   const channel = data?.channel || savedChannel;
-  async function markBefore() {
-    if (!before || marking) return;
+  async function markChannel(byDate: boolean) {
+    if ((byDate && !before) || marking) return;
     setMarking(true);
     try {
       const result = await api<{ updated: number }>("/api/watch-state/bulk", "POST", {
-        scope: "channel_before",
+        scope: byDate ? "channel_before" : "channel",
         channelId: id,
-        before: new Date(`${before}T00:00:00`).toISOString(),
+        before: byDate ? new Date(`${before}T00:00:00`).toISOString() : undefined,
       });
       notify(result.updated
         ? `${result.updated} vídeos marcados como vistos`
-        : "No hay vídeos pendientes anteriores a esa fecha en este canal");
-      setDateOpen(false);
+        : byDate
+          ? "No hay vídeos pendientes anteriores a esa fecha en este canal"
+          : "No hay vídeos pendientes en este canal");
+      setMarkOpen(false);
       if (result.updated) setVersion((value) => value + 1);
     } catch (cause) {
       notify((cause as Error).message);
@@ -1208,9 +1175,9 @@ function ChannelPageContent({ id }: { id: string }) {
         title={channel?.title || "Canal"}
         action={<div className="channel-heading-actions">
           <SubscribeChannel channelId={id} />
-          {savedChannel && <button className="button small secondary" aria-expanded={dateOpen}
-            onClick={() => setDateOpen((open) => !open)}>
-            <Icon name="check" size={16} /> Marcar por fecha
+          {savedChannel && <button className="button small secondary" aria-expanded={markOpen}
+            onClick={() => setMarkOpen((open) => !open)}>
+            <Icon name="check" size={16} /> Marcar vídeos
           </button>}
         </div>}
         description={
@@ -1220,11 +1187,15 @@ function ChannelPageContent({ id }: { id: string }) {
             : "Vídeos de este canal guardados en la biblioteca.")
         }
       />
-      {dateOpen && <div className="bulk-panel channel-date-panel">
+      {markOpen && <div className="bulk-panel channel-mark-panel">
+        <button className="button small secondary" disabled={marking}
+          onClick={() => void markChannel(false)}>
+          Marcar todos como vistos
+        </button>
         <label>Antes de <input type="date" value={before}
           onChange={(event) => setBefore(event.target.value)} /></label>
         <button className="button small" disabled={!before || marking}
-          onClick={() => void markBefore()}>
+          onClick={() => void markChannel(true)}>
           {marking ? "Marcando…" : "Marcar como vistos"}
         </button>
       </div>}

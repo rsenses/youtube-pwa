@@ -244,6 +244,8 @@ test("feed de 18, paginación y cabecera sin estado duplicado", async ({
   });
   await page.goto("/feed");
   await expect(page.locator(".video-card")).toHaveCount(18);
+  await expect(page.getByRole("button", { name: "Opciones de marcado masivo" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Marcar todos como vistos" })).toHaveCount(0);
   await expect(page.locator('link[rel="preconnect"][href="https://i.ytimg.com"]')).toHaveCount(1);
   const thumbnails = page.locator(".video-card .thumbnail img");
   for (let index = 0; index < 3; index++) {
@@ -380,7 +382,7 @@ test("canal no guardado muestra los metadatos públicos", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Canal público" })).toBeVisible();
   await expect(page.getByText("Descripción pública")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Vídeo público" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Marcar por fecha" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Marcar vídeos" })).toHaveCount(0);
 });
 
 test("marcar por fecha desde un canal envía solo ese canal", async ({ page }) => {
@@ -397,14 +399,17 @@ test("marcar por fecha desde un canal envía solo ese canal", async ({ page }) =
     return route.fulfill({ json: { updated: 1 } });
   });
   await page.goto(`/channels/${channelId}`);
-  await page.getByRole("button", { name: "Marcar por fecha" }).click();
-  await page.locator('.channel-date-panel input[type="date"]').fill("2026-10-10");
+  await page.getByRole("button", { name: "Marcar vídeos" }).click();
+  await page.locator('.channel-mark-panel input[type="date"]').fill("2026-10-10");
   await page.getByRole("button", { name: "Marcar como vistos" }).click();
   await expect.poll(() => body).toMatchObject({
     scope: "channel_before", channelId,
     before: new Date("2026-10-10T00:00:00").toISOString(),
   });
-  await expect(page.locator(".channel-date-panel")).toHaveCount(0);
+  await expect(page.locator(".channel-mark-panel")).toHaveCount(0);
+  await page.getByRole("button", { name: "Marcar vídeos" }).click();
+  await page.getByRole("button", { name: "Marcar todos como vistos" }).click();
+  await expect.poll(() => body).toMatchObject({ scope: "channel", channelId });
 });
 
 test("lista conserva quitar y ofrece el menú de vídeo", async ({ page }) => {

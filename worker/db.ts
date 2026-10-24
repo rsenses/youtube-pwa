@@ -616,7 +616,8 @@ export async function bulkWatchState(
     "v.purged_at IS NULL",
     ACCOUNT_VIDEO_CONDITION,
   ];
-  if (options.scope !== "channel_before") conditions.splice(1, 0, SUBSCRIBED_VIDEO_CONDITION);
+  const channelOnly = options.scope === "channel" || options.scope === "channel_before";
+  if (!channelOnly) conditions.splice(1, 0, SUBSCRIBED_VIDEO_CONDITION);
   const params: Array<string | number | null> = [
     accountId,
     options.watched ? 1 : 0,
@@ -624,7 +625,7 @@ export async function bulkWatchState(
     now,
     accountId,
   ];
-  if (options.scope !== "channel_before") params.push(accountId);
+  if (!channelOnly) params.push(accountId);
   if ((options.scope === "channel" || options.scope === "channel_before") && options.channelId) {
     conditions.push(CHANNEL_VIDEO_CONDITION);
     params.push(options.channelId);
@@ -633,7 +634,7 @@ export async function bulkWatchState(
     conditions.push("v.published_at < ?");
     params.push(options.before);
   }
-  if (options.scope === "channel_before" && options.watched) {
+  if (channelOnly && options.watched) {
     conditions.push("NOT EXISTS (SELECT 1 FROM watch_states ws WHERE ws.account_id = ? AND ws.video_id = v.id AND ws.watched = 1)");
     params.push(accountId);
   }
