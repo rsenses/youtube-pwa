@@ -93,6 +93,49 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
   await expect(page.getByRole("heading", { name: "Llegada first" })).toHaveCount(0);
 });
 
+test("el swipe muestra la acción detrás y saca la tarjeta sin rebote", async ({ page }) => {
+  const video = feedItem("swipe", "Vídeo para deslizar");
+  let finishWrite!: () => void;
+  await page.route("**/api/session", (route) => route.fulfill({ json: {
+    mode: "real", connected: true, csrfToken: "test", account: { name: "Fixture" },
+    capabilities: { automaticDiscovery: true, localPlaylists: true, externalSync: true },
+  } }));
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({ json: { watchThreshold: 80, theme: "system" } }));
+  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route("**/api/feed?**", (route) =>
+    route.fulfill({ json: { items: [video], nextCursor: null } }));
+  await page.route("**/api/videos/*/watch-state", async (route) => {
+    await new Promise<void>((resolve) => { finishWrite = resolve; });
+    await route.fulfill({ json: { ...video, watched: true } });
+  });
+
+  await page.goto("/feed");
+  const shell = page.locator(".swipe-card");
+  const card = shell.locator(".video-card");
+  await expect(card).toBeVisible();
+  const touch = (type: string, x: number) => card.evaluate((element, gesture) => {
+    const point = new Touch({ identifier: 1, target: element, clientX: gesture.x, clientY: 200 });
+    element.dispatchEvent(new TouchEvent(gesture.type, {
+      bubbles: true,
+      touches: gesture.type === "touchend" ? [] : [point],
+      changedTouches: [point],
+    }));
+  }, { type, x });
+  await touch("touchstart", 30);
+  await touch("touchmove", 140);
+  await expect(card).toHaveClass(/is-swiping/);
+  await touch("touchend", 140);
+  await expect(card).toHaveClass(/is-leaving/);
+  await expect(shell.locator(".swipe-feedback")).toContainText("Marcando como visto");
+  await expect.poll(async () => {
+    const [cardBox, shellBox] = await Promise.all([card.boundingBox(), shell.boundingBox()]);
+    return cardBox!.x - shellBox!.x;
+  }).toBeGreaterThan(100);
+  finishWrite();
+  await expect(shell).toHaveCount(0);
+});
+
 function feedItem(
   id: string,
   title: string,

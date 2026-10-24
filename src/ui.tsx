@@ -163,28 +163,44 @@ export function VideoCard({
 }) {
     const [busy, setBusy] = useState(false),
         [error, setError] = useState(""),
-        [swipe, setSwipe] = useState(0);
+        [swipe, setSwipe] = useState(0),
+        [leaving, setLeaving] = useState(false),
+        [resetting, setResetting] = useState(false);
     const start = useRef<{ x: number; y: number } | null>(null);
+    const swipeDistance = useRef(0);
     const suppressClickUntil = useRef(0);
     const type = videoType(video);
-    async function toggle() {
+    async function toggle(fromSwipe = false) {
         setBusy(true);
         setError("");
         try {
-            const v = await api<Video>(
-                `/api/videos/${video.id}/watch-state`,
-                "PUT",
-                { watched: !video.watched },
-            );
+            const request = api<Video>(`/api/videos/${video.id}/watch-state`, "PUT", {
+                watched: !video.watched,
+            });
+            const v = fromSwipe
+                ? (await Promise.all([request, new Promise((resolve) => setTimeout(resolve, 240))]))[0]
+                : await request;
+            if (fromSwipe) {
+                setResetting(true);
+                setLeaving(false);
+                setSwipe(0);
+                swipeDistance.current = 0;
+                requestAnimationFrame(() => requestAnimationFrame(() => setResetting(false)));
+            }
             onChange?.(v);
         } catch (e) {
             setError((e as Error).message);
+            if (fromSwipe) {
+                setLeaving(false);
+                setSwipe(0);
+                swipeDistance.current = 0;
+            }
         } finally {
             setBusy(false);
         }
     }
     function touchStart(event: TouchEvent<HTMLElement>) {
-        if (!swipeToWatch || busy || video.watched || event.touches.length !== 1) return;
+        if (!swipeToWatch || busy || leaving || video.watched || event.touches.length !== 1) return;
         start.current = { x: event.touches[0].clientX, y: event.touches[0].clientY };
     }
     function touchMove(event: TouchEvent<HTMLElement>) {
@@ -194,27 +210,34 @@ export function VideoCard({
         if (Math.abs(dy) > 15 && Math.abs(dy) > Math.abs(dx)) {
             start.current = null;
             setSwipe(0);
+            swipeDistance.current = 0;
             return;
         }
         if (dx > 18 && dx > Math.abs(dy) * 1.4) {
             suppressClickUntil.current = Date.now() + 500;
-            setSwipe(Math.min(dx, 110));
+            swipeDistance.current = Math.min(dx, 110);
+            setSwipe(swipeDistance.current);
         }
     }
     function touchEnd() {
-        const completed = start.current && swipe >= 80;
+        const completed = start.current && swipeDistance.current >= 80;
         start.current = null;
-        setSwipe(0);
-        if (completed) void toggle();
+        if (completed) {
+            setLeaving(true);
+            void toggle(true);
+        } else {
+            swipeDistance.current = 0;
+            setSwipe(0);
+        }
     }
-    return (
+    const card = (
         <article
-            className={`video-card ${compact ? "compact" : ""} ${video.watched ? "is-watched" : ""} ${swipe > 0 ? "is-swiping" : ""}`}
-            style={swipeToWatch ? { transform: `translateX(${swipe}px)`, touchAction: "pan-y" } : undefined}
+            className={`video-card ${compact ? "compact" : ""} ${video.watched ? "is-watched" : ""} ${swipe > 0 && !leaving ? "is-swiping" : ""} ${leaving ? "is-leaving" : ""} ${resetting ? "is-resetting" : ""}`}
+            style={swipeToWatch ? { transform: leaving ? "translateX(100%)" : `translateX(${swipe}px)`, touchAction: "pan-y" } : undefined}
             onTouchStart={touchStart}
             onTouchMove={touchMove}
             onTouchEnd={touchEnd}
-            onTouchCancel={() => { start.current = null; setSwipe(0); }}
+            onTouchCancel={() => { start.current = null; swipeDistance.current = 0; setSwipe(0); }}
             onClickCapture={(event) => {
                 if (Date.now() < suppressClickUntil.current) {
                     event.preventDefault();
@@ -222,7 +245,6 @@ export function VideoCard({
                 }
             }}
         >
-            {swipeToWatch && swipe > 0 && <span className="swipe-feedback" aria-hidden="true">{swipe >= 80 ? "Soltar para marcar visto" : "Desliza para marcar visto"}</span>}
             <Link
                 to={videoUrl(video.id)}
                 className="thumbnail"
@@ -295,7 +317,7 @@ export function VideoCard({
                         video.watched ? "Marcar pendiente" : "Marcar visto"
                     }
                     title={video.watched ? "Marcar pendiente" : "Marcar visto"}
-                    onClick={toggle}
+                    onClick={() => void toggle()}
                     disabled={busy}
                 >
                     <Icon name="check" size={18} />
@@ -303,4 +325,13 @@ export function VideoCard({
             </div>
         </article>
     );
+    return swipeToWatch ? (
+        <div className={`swipe-card ${swipe > 0 || leaving ? "is-active" : ""}`}>
+            <span className="swipe-feedback" aria-hidden="true">
+                <Icon name="check" size={20} />
+                {leaving ? "Marcando como visto…" : swipe >= 80 ? "Soltar para marcar visto" : "Marcar como visto"}
+            </span>
+            {card}
+        </div>
+    ) : card;
 }

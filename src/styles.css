@@ -617,20 +617,25 @@ label > textarea {
         transform 0.15s,
         opacity 0.18s ease;
 }
+.swipe-card { position: relative; min-width: 0; border-radius: 14px; }
+.swipe-card.is-active { overflow: hidden; }
+.swipe-card .video-card { position: relative; }
 .swipe-feedback {
     position: absolute;
-    left: 8px;
-    top: 8px;
-    z-index: 1;
-    padding: 6px 8px;
-    border-radius: 6px;
-    background: var(--surface);
+    inset: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px;
+    background: var(--green-soft);
     color: var(--green);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     pointer-events: none;
 }
 .video-card.is-swiping { transition: none; }
+.video-card.is-leaving { transition: transform 0.22s ease-in; }
+.video-card.is-resetting { opacity: 0; transition: none; }
 .exclusion-filter { width: fit-content; margin: 16px 0 24px; }
 .playlist-heading-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .playlist-heading-actions .settings-buttons { margin-top: 0; }
