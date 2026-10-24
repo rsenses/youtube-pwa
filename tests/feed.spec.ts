@@ -138,7 +138,7 @@ test("el swipe muestra la acción detrás y saca la tarjeta sin rebote", async (
   await expect(card).toHaveClass(/is-swiping/);
   await touch("touchend", 140);
   await expect(card).toHaveClass(/is-leaving/);
-  await expect(shell.locator(".swipe-feedback")).toContainText("Marcando como visto");
+  await expect(shell.locator(".swipe-feedback")).toContainText("Visto");
   await expect.poll(async () => {
     const [cardBox, shellBox] = await Promise.all([card.boundingBox(), shell.boundingBox()]);
     return cardBox!.x - shellBox!.x;

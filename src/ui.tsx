@@ -332,7 +332,7 @@ export function VideoCard({
         <div className={`swipe-card ${swipe > 0 || leaving ? "is-active" : ""}`}>
             <span className="swipe-feedback" aria-hidden="true">
                 <Icon name="check" size={20} />
-                {leaving ? "Marcando como visto…" : swipe >= 80 ? "Soltar para marcar visto" : "Marcar como visto"}
+                Visto
             </span>
             {card}
         </div>
