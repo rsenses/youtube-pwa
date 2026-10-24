@@ -124,6 +124,45 @@ afterAll(async () => {
 });
 
 describe("D1 synchronization outcomes with mocked external responses", () => {
+  it("marks only older videos from the selected channel for the current user", async () => {
+    const selectedId = "UC" + "q".repeat(22);
+    const otherId = "UC" + "r".repeat(22);
+    const olderId = "dateolder01";
+    const newerId = "datenewer01";
+    const otherVideoId = "dateother01";
+    for (const [channelId, title] of [[selectedId, "Selected"], [otherId, "Other"]]) {
+      await upsertExternalChannel(env.DB, { id: channelId, title, description: "", thumbnailUrl: null }, future);
+    }
+    for (const [id, channelId, publishedAt] of [
+      [olderId, selectedId, "2026-09-01T00:00:00Z"],
+      [newerId, selectedId, "2026-10-20T00:00:00Z"],
+      [otherVideoId, otherId, "2026-09-01T00:00:00Z"],
+    ]) {
+      await externalVideoStatement(env.DB, {
+        id, channelId, channelTitle: "Test", title: id, description: "",
+        thumbnailUrl: "", publishedAt, durationSeconds: 300,
+        viewCount: null, source: "rss",
+      }, future).run();
+    }
+    const { token, session } = await insertSession(env.DB, account.id);
+    const mark = () => worker.fetch(new Request(`${env.APP_ORIGIN}/api/watch-state/bulk`, {
+      method: "POST",
+      headers: { cookie: `${SESSION_COOKIE}=${token}`, origin: env.APP_ORIGIN,
+        "content-type": "application/json", "x-csrf-token": session.csrf_token },
+      body: JSON.stringify({ scope: "channel_before", channelId: selectedId,
+        before: "2026-10-10T00:00:00.000Z" }),
+    }), env);
+    const first = await mark();
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ updated: 1, scope: "channel_before" });
+    const second = await mark();
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ updated: 0 });
+    const states = await env.DB.prepare(
+      "SELECT video_id, watched FROM watch_states WHERE account_id=? AND video_id IN (?,?,?)",
+    ).bind(account.id, olderId, newerId, otherVideoId).all<{ video_id: string; watched: number }>();
+    expect(states.results).toEqual([{ video_id: olderId, watched: 1 }]);
+  });
   it("pages old channel uploads from YouTube without importing them and preserves personal state", async () => {
     const channelId = "UC" + "h".repeat(22);
     const ids = Array.from({ length: 19 }, (_, i) => `history${String(i).padStart(4, "0")}`);

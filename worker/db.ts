@@ -599,7 +599,7 @@ export async function setProgress(
     .run();
 }
 
-export type BulkScope = "all" | "channel" | "before";
+export type BulkScope = "all" | "channel" | "before" | "channel_before";
 
 export async function bulkWatchState(
   db: D1Database,
@@ -614,24 +614,28 @@ export async function bulkWatchState(
 ): Promise<number> {
   const conditions = [
     "v.purged_at IS NULL",
-    SUBSCRIBED_VIDEO_CONDITION,
     ACCOUNT_VIDEO_CONDITION,
   ];
+  if (options.scope !== "channel_before") conditions.splice(1, 0, SUBSCRIBED_VIDEO_CONDITION);
   const params: Array<string | number | null> = [
     accountId,
     options.watched ? 1 : 0,
     options.watched ? now : null,
     now,
     accountId,
-    accountId,
   ];
-  if (options.scope === "channel" && options.channelId) {
+  if (options.scope !== "channel_before") params.push(accountId);
+  if ((options.scope === "channel" || options.scope === "channel_before") && options.channelId) {
     conditions.push(CHANNEL_VIDEO_CONDITION);
     params.push(options.channelId);
   }
-  if (options.scope === "before" && options.before) {
+  if ((options.scope === "before" || options.scope === "channel_before") && options.before) {
     conditions.push("v.published_at < ?");
     params.push(options.before);
+  }
+  if (options.scope === "channel_before" && options.watched) {
+    conditions.push("NOT EXISTS (SELECT 1 FROM watch_states ws WHERE ws.account_id = ? AND ws.video_id = v.id AND ws.watched = 1)");
+    params.push(accountId);
   }
   const sql = `
     INSERT INTO watch_states

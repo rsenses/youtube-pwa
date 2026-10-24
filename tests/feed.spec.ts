@@ -380,6 +380,31 @@ test("canal no guardado muestra los metadatos públicos", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Canal público" })).toBeVisible();
   await expect(page.getByText("Descripción pública")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Vídeo público" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Marcar por fecha" })).toHaveCount(0);
+});
+
+test("marcar por fecha desde un canal envía solo ese canal", async ({ page }) => {
+  const channelId = "UCfixture";
+  let body: Record<string, unknown> | null = null;
+  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [{
+    id: channelId, title: "Canal de prueba", description: "", thumbnailUrl: "", subscribed: true,
+  }] } }));
+  await page.route(`**/api/channels/${channelId}/videos?**`, (route) => route.fulfill({ json: {
+    items: [feedItem("dated", "Vídeo anterior")], nextCursor: null,
+  } }));
+  await page.route("**/api/watch-state/bulk", (route) => {
+    body = route.request().postDataJSON();
+    return route.fulfill({ json: { updated: 1 } });
+  });
+  await page.goto(`/channels/${channelId}`);
+  await page.getByRole("button", { name: "Marcar por fecha" }).click();
+  await page.locator('.channel-date-panel input[type="date"]').fill("2026-10-10");
+  await page.getByRole("button", { name: "Marcar como vistos" }).click();
+  await expect.poll(() => body).toMatchObject({
+    scope: "channel_before", channelId,
+    before: new Date("2026-10-10T00:00:00").toISOString(),
+  });
+  await expect(page.locator(".channel-date-panel")).toHaveCount(0);
 });
 
 test("lista conserva quitar y ofrece el menú de vídeo", async ({ page }) => {
@@ -542,7 +567,7 @@ test("descarta paginación tardía al cambiar tipos", async ({ page }) => {
   await expect(page.locator(".video-card")).toHaveCount(1);
 });
 
-test("los tipos conservan estado, canal y URL", async ({ page }) => {
+test("los tipos conservan estado y eliminan el filtro antiguo de canal", async ({ page }) => {
   const requests: URL[] = [];
   await page.route("**/api/feed?**", async (route) => {
     requests.push(new URL(route.request().url()));
@@ -553,7 +578,8 @@ test("los tipos conservan estado, canal y URL", async ({ page }) => {
   await expect.poll(() => requests.length).toBeGreaterThan(0);
   expect(requests[0]?.searchParams.get("types")).toBe("short");
   expect(requests[0]?.searchParams.get("status")).toBe("all");
-  expect(requests[0]?.searchParams.get("channelId")).toBe("UCfixture");
+  expect(requests[0]?.searchParams.has("channelId")).toBe(false);
+  await expect(page.getByLabel("Filtrar por canal")).toHaveCount(0);
 
   await page
     .getByRole("group", { name: "Filtrar por tipo" })
@@ -563,12 +589,12 @@ test("los tipos conservan estado, canal y URL", async ({ page }) => {
     .poll(() => requests.at(-1)?.searchParams.get("types"))
     .toBe("live,short");
   expect(requests.at(-1)?.searchParams.get("status")).toBe("all");
-  expect(requests.at(-1)?.searchParams.get("channelId")).toBe("UCfixture");
+  expect(requests.at(-1)?.searchParams.has("channelId")).toBe(false);
   expect(requests.at(-1)?.searchParams.has("cursor")).toBe(false);
   const current = new URL(page.url()).searchParams;
   expect(current.get("types")).toBe("live,short");
   expect(current.get("status")).toBe("all");
-  expect(current.get("channelId")).toBe("UCfixture");
+  expect(current.has("channelId")).toBe(false);
 });
 
 test("Configuración indica edición no autorizada y ofrece permiso", async ({

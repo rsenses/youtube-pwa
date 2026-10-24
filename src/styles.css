@@ -360,6 +360,12 @@ label > textarea {
 .page-heading-action {
     flex-shrink: 0;
 }
+.channel-heading-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
 .button {
     display: inline-flex;
     align-items: center;
@@ -515,26 +521,6 @@ label > textarea {
     display: flex;
     align-items: center;
     gap: 8px;
-}
-.channel-select {
-    position: relative;
-    display: block;
-}
-.channel-select .select-chevron {
-    position: absolute;
-    top: 50%;
-    right: 12px;
-    display: flex;
-    color: var(--muted);
-    pointer-events: none;
-    transform: translateY(-50%) rotate(90deg);
-}
-.channel-select select {
-    appearance: none;
-    min-height: 44px;
-    max-width: 220px;
-    padding-right: 38px;
-    font-size: 14px;
 }
 .video-grid {
     display: grid;
@@ -1818,8 +1804,7 @@ label > textarea {
 }
 @media (min-width: 701px) {
     .type-filters button,
-    .segmented button,
-    .channel-select select {
+    .segmented button {
         min-height: 38px;
     }
 }
@@ -1957,15 +1942,6 @@ label > textarea {
     }
     .filter-actions {
         width: 100%;
-    }
-    .channel-select {
-        flex: 1;
-        min-width: 0;
-    }
-    .channel-select select {
-        width: 100%;
-        max-width: none;
-        font-size: 14px;
     }
     .bulk-panel {
         flex-direction: column;

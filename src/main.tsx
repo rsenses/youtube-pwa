@@ -701,8 +701,7 @@ const feedVideoTypes: Array<{ value: VideoType; label: string }> = [
 ];
 function Feed() {
   const [search, setSearch] = useSearchParams();
-  const status = search.get("status") || "pending",
-    channel = search.get("channelId") || "";
+  const status = search.get("status") || "pending";
   const rawTypes = search.get("types"),
     types = feedVideoTypes
       .map((t) => t.value)
@@ -715,9 +714,7 @@ function Feed() {
     [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
     [version, setVersion] = useState(0),
-    [bulk, setBulk] = useState(false),
-    [before, setBefore] = useState("");
-  const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
+    [bulk, setBulk] = useState(false);
   const { notify, session } = useApp();
   const loadGeneration = useRef(0);
   const loadedQuery = useRef<string | null>(null);
@@ -758,15 +755,15 @@ function Feed() {
   }, [session.capabilities.automaticDiscovery]);
   const query = new URLSearchParams({
     status,
-    channelId: channel,
     types: typesParam,
     limit: "18",
   }).toString();
   useEffect(() => {
-    // Legacy links without a type filter adopt the product default (video + live).
-    if (rawTypes !== null) return;
+    // Normalize older feed links, including the removed channel filter.
+    if (rawTypes !== null && !search.has("channelId")) return;
     const next = new URLSearchParams(search);
-    next.set("types", DEFAULT_FEED_TYPES);
+    if (rawTypes === null) next.set("types", DEFAULT_FEED_TYPES);
+    next.delete("channelId");
     setSearch(next, { replace: true });
   }, [rawTypes, search, setSearch]);
   useEffect(() => {
@@ -836,18 +833,10 @@ function Feed() {
     value ? s.set(key, value) : s.delete(key);
     setSearch(s);
   }
-  async function mark(scope: "all" | "channel" | "before") {
-    if (scope === "before" && !before) return;
+  async function mark() {
     setBusy(true);
     try {
-      await api("/api/watch-state/bulk", "POST", {
-        scope,
-        channelId: channel || undefined,
-        before:
-          scope === "before"
-            ? new Date(`${before}T00:00:00`).toISOString()
-            : undefined,
-      });
+      await api("/api/watch-state/bulk", "POST", { scope: "all" });
       notify("Vídeos marcados como vistos");
       setVersion((v) => v + 1);
       setBulk(false);
@@ -906,25 +895,6 @@ function Feed() {
             </div>
           </div>
           <div className="filter-actions">
-            <label className="channel-select">
-              <span className="sr-only">Filtrar por canal</span>
-              <span className="select-chevron" aria-hidden="true">
-                <Icon name="chevron" size={16} />
-              </span>
-              <select
-                value={channel}
-                onChange={(e) => filter("channelId", e.target.value)}
-              >
-                <option value="">Todos los canales</option>
-                {channels?.items
-                  .filter((c) => c.subscribed)
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.title}
-                    </option>
-                  ))}
-              </select>
-            </label>
             <button
               className={`icon-button ${bulk ? "active" : ""}`}
               aria-label="Opciones de marcado masivo"
@@ -941,33 +911,9 @@ function Feed() {
             <button
               className="button small secondary"
               disabled={busy}
-              onClick={() => mark("all")}
+              onClick={() => void mark()}
             >
               Marcar todos como vistos
-            </button>
-            {channel && (
-              <button
-                className="button small secondary"
-                disabled={busy}
-                onClick={() => mark("channel")}
-              >
-                Marcar este canal
-              </button>
-            )}
-            <label>
-              Antes de{" "}
-              <input
-                type="date"
-                value={before}
-                onChange={(e) => setBefore(e.target.value)}
-              />
-            </label>
-            <button
-              className="button small"
-              disabled={!before || busy}
-              onClick={() => mark("before")}
-            >
-              Aplicar fecha
             </button>
           </div>
         )}
@@ -1221,12 +1167,38 @@ type ChannelVideoPage = {
   nextCursor: string | null;
 };
 function ChannelPageContent({ id }: { id: string }) {
-  const { session } = useApp();
+  const { session, notify } = useApp();
+  const [dateOpen, setDateOpen] = useState(false);
+  const [before, setBefore] = useState("");
+  const [marking, setMarking] = useState(false);
+  const [version, setVersion] = useState(0);
   const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
   const { data, error, loading } = useResource<ChannelVideoPage>(
     `/api/channels/${id}/videos?limit=18`,
+    version,
   );
-  const channel = data?.channel || channels?.items.find((c) => c.id === id);
+  const savedChannel = channels?.items.find((c) => c.id === id);
+  const channel = data?.channel || savedChannel;
+  async function markBefore() {
+    if (!before || marking) return;
+    setMarking(true);
+    try {
+      const result = await api<{ updated: number }>("/api/watch-state/bulk", "POST", {
+        scope: "channel_before",
+        channelId: id,
+        before: new Date(`${before}T00:00:00`).toISOString(),
+      });
+      notify(result.updated
+        ? `${result.updated} vídeos marcados como vistos`
+        : "No hay vídeos pendientes anteriores a esa fecha en este canal");
+      setDateOpen(false);
+      if (result.updated) setVersion((value) => value + 1);
+    } catch (cause) {
+      notify((cause as Error).message);
+    } finally {
+      setMarking(false);
+    }
+  }
   return (
     <>
       <Link to="/channels" className="back-link">
@@ -1234,7 +1206,13 @@ function ChannelPageContent({ id }: { id: string }) {
       </Link>
       <PageHeading
         title={channel?.title || "Canal"}
-        action={<SubscribeChannel channelId={id} />}
+        action={<div className="channel-heading-actions">
+          <SubscribeChannel channelId={id} />
+          {savedChannel && <button className="button small secondary" aria-expanded={dateOpen}
+            onClick={() => setDateOpen((open) => !open)}>
+            <Icon name="check" size={16} /> Marcar por fecha
+          </button>}
+        </div>}
         description={
           channel?.description ||
           (session.capabilities.publicData
@@ -1242,6 +1220,14 @@ function ChannelPageContent({ id }: { id: string }) {
             : "Vídeos de este canal guardados en la biblioteca.")
         }
       />
+      {dateOpen && <div className="bulk-panel channel-date-panel">
+        <label>Antes de <input type="date" value={before}
+          onChange={(event) => setBefore(event.target.value)} /></label>
+        <button className="button small" disabled={!before || marking}
+          onClick={() => void markBefore()}>
+          {marking ? "Marcando…" : "Marcar como vistos"}
+        </button>
+      </div>}
       <ChannelVideos id={id} data={data} error={error} loading={loading} />
     </>
   );

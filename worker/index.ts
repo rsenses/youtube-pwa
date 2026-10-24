@@ -703,18 +703,18 @@ async function handleBulkWatch(ctx: RouteContext): Promise<Response> {
   const body = await readJsonObject(ctx.request);
   const scope = parseEnum(
     requiredString(body, "scope", { max: 20 }),
-    ["all", "channel", "before"] as const,
+    ["all", "channel", "before", "channel_before"] as const,
     "scope",
   );
   let channelId: string | null = null;
   let before: string | null = null;
-  if (scope === "channel") {
+  if (scope === "channel" || scope === "channel_before") {
     channelId = assertId(
       requiredString(body, "channelId", { max: 64 }),
       "channelId",
     );
   }
-  if (scope === "before") {
+  if (scope === "before" || scope === "channel_before") {
     before = parseIsoDate(
       requiredString(body, "before", { max: 40 }),
       "before",
