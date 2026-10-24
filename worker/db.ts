@@ -78,8 +78,10 @@ const VIDEO_COLUMNS = `
   CASE WHEN pm.details_fetched_at IS NOT NULL AND pm.details_fetched_at>COALESCE(v.details_fetched_at,'') THEN COALESCE(json_extract(pm.metadata,'$.viewCount'),v.view_count) ELSE COALESCE(v.view_count,json_extract(pm.metadata,'$.viewCount')) END AS viewCount,
   COALESCE(ws.revision, 0) AS revision`;
 
-export function mapVideoRow(row: Record<string, unknown>): Video {
-  const video: Video = {
+type VideoWithFeedEligibility = Video & { feedEligible?: boolean };
+
+export function mapVideoRow(row: Record<string, unknown>): VideoWithFeedEligibility {
+  const video: VideoWithFeedEligibility = {
     id: String(row.id ?? ""),
     title: String(row.title ?? ""),
     channelId: String(row.channelId ?? ""),
@@ -104,6 +106,7 @@ export function mapVideoRow(row: Record<string, unknown>): Video {
   if (typeof row.playlistItemId === "string" && row.playlistItemId) {
     video.playlistItemId = row.playlistItemId;
   }
+  if (row.feedEligible !== undefined) video.feedEligible = toNumber(row.feedEligible) === 1;
   return video;
 }
 
@@ -422,16 +425,21 @@ export async function getVideo(
   accountId: string,
   videoId: string,
   scope: VideoScope,
-): Promise<Video | null> {
+  includeFeedEligibility = false,
+): Promise<VideoWithFeedEligibility | null> {
   const row = await db
     .prepare(
-      `SELECT ${VIDEO_COLUMNS}
+      `SELECT ${VIDEO_COLUMNS}${includeFeedEligibility ? `,
+       CASE WHEN v.source<>'fixture' AND v.purged_at IS NULL AND v.short_candidate=0
+         AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id=?
+           AND s.channel_id=v.channel_id AND s.active=1 AND s.excluded=0)
+         THEN 1 ELSE 0 END AS feedEligible` : ""}
        FROM videos v
        LEFT JOIN watch_states ws ON ws.video_id = v.id AND ws.account_id = ?
        ${OWNED_VIDEO_JOIN}
        WHERE v.id = ? AND (v.purged_at IS NULL OR pm.video_id IS NOT NULL) AND ${videoSourceCondition(scope)} AND ${ACCOUNT_VIDEO_CONDITION}`,
     )
-    .bind(accountId, accountId, videoId)
+    .bind(...(includeFeedEligibility ? [accountId, accountId, accountId, videoId] : [accountId, accountId, videoId]))
     .first<Record<string, unknown>>();
   return row ? mapVideoRow(row) : null;
 }

@@ -317,6 +317,48 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("caches a manually pending feed thumbnail once and removes it when viewed", async () => {
+    const id = "pendingr201";
+    await externalVideoStatement(env.DB, {
+      id, channelId: "UCold", channelTitle: "Old channel", title: "Pending image",
+      description: "", thumbnailUrl: "", publishedAt: "2026-10-20T00:00:00Z",
+      durationSeconds: 300, viewCount: null, source: "rss",
+    }, future).run();
+    const images = new Map<string, ArrayBuffer>();
+    const put = vi.fn(async (key: string, bytes: ArrayBuffer) => { images.set(key, bytes); });
+    const remove = vi.fn(async (key: string) => { images.delete(key); });
+    env.FEED_IMAGES = {
+      head: async (key: string) => images.has(key) ? { key } : null,
+      put,
+      delete: remove,
+    } as unknown as R2Bucket;
+    const imageFetch = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/jpeg" },
+    }));
+    vi.stubGlobal("fetch", imageFetch);
+    const { token, session } = await insertSession(env.DB, account.id);
+    const change = async (watched: boolean) => worker.fetch(new Request(`${env.APP_ORIGIN}/api/videos/${id}/watch-state`, {
+      method: "PUT",
+      headers: { cookie: `${SESSION_COOKIE}=${token}`, origin: env.APP_ORIGIN,
+        "content-type": "application/json", "x-csrf-token": session.csrf_token },
+      body: JSON.stringify({ watched }),
+    }), env);
+    try {
+      expect((await change(false)).status).toBe(200);
+      expect(images.has(`v1/${account.id}/${id}`)).toBe(true);
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(imageFetch).toHaveBeenCalledTimes(1);
+      expect((await change(false)).status).toBe(200);
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(imageFetch).toHaveBeenCalledTimes(1);
+      expect((await change(true)).status).toBe(200);
+      expect(images.has(`v1/${account.id}/${id}`)).toBe(false);
+      expect(remove).toHaveBeenCalledWith(`v1/${account.id}/${id}`);
+    } finally {
+      env.FEED_IMAGES = undefined;
+      vi.unstubAllGlobals();
+    }
+  });
   it("searches old public videos across pages without creating D1 rows and reuses KV results", async () => {
     const firstId = "search00001";
     const secondId = "search00002";

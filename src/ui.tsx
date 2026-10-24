@@ -122,16 +122,19 @@ export function useResource<T>(path: string | null, version = 0) {
     const [data, setData] = useState<T | null>(null),
         [error, setError] = useState(""),
         [loading, setLoading] = useState(true);
+    const loadedPath = useRef(path);
     useEffect(() => {
         if (!path) {
             setLoading(false);
             setData(null);
+            loadedPath.current = path;
             return;
         }
         const c = new AbortController();
         setLoading(true);
         setError("");
-        setData(null);
+        if (loadedPath.current !== path) setData(null);
+        loadedPath.current = path;
         api<T>(path, "GET", undefined, c.signal)
             .then(setData)
             .catch((e) => {

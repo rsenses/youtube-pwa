@@ -400,7 +400,6 @@ function App() {
   async function updateSettings(value: Partial<Settings>) {
     const s = await api<Settings>("/api/settings", "PATCH", value);
     settingsSet(s);
-    toastSet("Preferencias guardadas");
   }
   if (error)
     return (
@@ -1009,8 +1008,13 @@ function Channels() {
         c.subscribed ? "DELETE" : "POST",
         c.subscribed ? undefined : { channelId: c.id },
       );
+      setData((current) => current && ({
+        ...current,
+        items: current.items.map((item) => item.id === c.id
+          ? { ...item, subscribed: !c.subscribed }
+          : item),
+      }));
       setVersion((v) => v + 1);
-      notify(c.subscribed ? "Suscripción cancelada" : "Suscripción añadida");
     } catch (e) {
       notify((e as Error).message);
     }
@@ -1022,7 +1026,6 @@ function Channels() {
         ...current,
         items: current.items.filter((item) => item.id !== c.id),
       });
-      notify(c.excluded ? "Canal incluido" : "Canal excluido de la aplicación");
     } catch (e) { notify((e as Error).message); }
   }
   return (
@@ -1332,7 +1335,6 @@ function Playlists() {
         ...current,
         items: current.items.filter((item) => item.id !== p.id),
       });
-      notify(p.excluded ? "Lista incluida" : "Lista excluida de la aplicación");
     } catch (e) { notify((e as Error).message); }
   }
   return (
@@ -1428,7 +1430,6 @@ function PlaylistForm({
             playlist ? "PATCH" : "POST",
             { title, description, source },
           );
-          notify("Lista guardada");
           onDone();
         } catch (e) {
           notify((e as Error).message);
@@ -1464,7 +1465,8 @@ function PlaylistPage() {
   const { id } = useParams();
   const [version, setVersion] = useState(0),
     [edit, setEdit] = useState(false),
-    [confirm, setConfirm] = useState(false);
+    [confirm, setConfirm] = useState(false),
+    [removingItem, setRemovingItem] = useState<string | null>(null);
   const { data, setData, error, loading } = useResource<PlaylistDetail>(
     `/api/playlists/${id}`,
     version,
@@ -1528,7 +1530,6 @@ function PlaylistPage() {
                       try {
                         await api(`/api/playlists/${id}`, "DELETE");
                         navigate("/playlists");
-                        notify("Lista eliminada");
                       } catch (e) {
                         notify((e as Error).message);
                       }
@@ -1554,21 +1555,32 @@ function PlaylistPage() {
                 extra={
                   <button
                     className="icon-button"
-                    aria-label="Quitar de la lista"
+                    aria-label={removingItem === v.playlistItemId ? "Quitando de la lista…" : "Quitar de la lista"}
                     title="Quitar de la lista"
+                    disabled={removingItem !== null}
                     onClick={async () => {
+                      if (!v.playlistItemId) return;
+                      setRemovingItem(v.playlistItemId);
                       try {
                         await api(
                           `/api/playlists/${id}/items/${v.playlistItemId}`,
                           "DELETE",
                         );
-                        setVersion((x) => x + 1);
+                        setData((current) => current && ({
+                          ...current,
+                          itemCount: Math.max(0, current.itemCount - 1),
+                          items: current.items.filter((item) => item.playlistItemId !== v.playlistItemId),
+                        }));
                       } catch (e) {
                         notify((e as Error).message);
+                      } finally {
+                        setRemovingItem(null);
                       }
                     }}
                   >
-                    <Icon name="close" size={17} />
+                    <span className={removingItem === v.playlistItemId ? "spin" : ""}>
+                      <Icon name={removingItem === v.playlistItemId ? "sync" : "close"} size={17} />
+                    </span>
                   </button>
                 }
               />
@@ -1620,11 +1632,7 @@ function SubscribeChannel({ channelId }: { channelId: string }) {
         try {
           await api("/api/subscriptions", "POST", { channelId });
           setSubscribed(true);
-          notify(
-            session.mode === "demo"
-              ? "Canal seguido en la demo"
-              : "Suscripción añadida en YouTube",
-          );
+          notify(session.mode === "demo" ? "Canal seguido en la demo" : "Suscripción añadida en YouTube");
         } catch (e) {
           notify((e as Error).message);
         } finally {
@@ -1743,11 +1751,6 @@ function Watch({
                       await api<Video>(`/api/videos/${id}/watch-state`, "PUT", {
                         watched: !video.watched,
                       }),
-                    );
-                    notify(
-                      video.watched
-                        ? "Marcado como pendiente"
-                        : "Marcado como visto",
                     );
                   } catch (e) {
                     notify((e as Error).message);

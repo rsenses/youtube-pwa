@@ -425,6 +425,63 @@ test("lista conserva quitar y ofrece el menú de vídeo", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Ver canal" })).toBeVisible();
 });
 
+test("quitar un vídeo de una lista conserva la página, el scroll y las demás tarjetas", async ({ page }) => {
+  let reads = 0;
+  await page.route("**/api/playlists/list-1", (route) => {
+    reads++;
+    return route.fulfill({ json: {
+      id: "list-1", title: "Favoritos", description: "", source: "local", itemCount: 30,
+      items: Array.from({ length: 30 }, (_, index) => ({
+        ...feedItem(`listed${index}`, `Vídeo ${index}`), playlistItemId: `item-${index}`,
+      })),
+    } });
+  });
+  await page.route("**/api/playlists/list-1/items/item-10", (route) =>
+    route.fulfill({ json: { ok: true } }));
+  await page.goto("/playlists/list-1");
+  await expect(page.locator(".video-card")).toHaveCount(30);
+  const target = page.locator(".video-card").filter({ hasText: "Vídeo 10" });
+  await target.scrollIntoViewIfNeeded();
+  await page.evaluate(() => { (window as Window & { retained?: string }).retained = "yes"; });
+  const before = await page.evaluate(() => window.scrollY);
+  expect(before).toBeGreaterThan(0);
+  await target.getByRole("button", { name: "Quitar de la lista" }).click();
+  await expect(target).toHaveCount(0);
+  await expect(page.locator(".video-card")).toHaveCount(29);
+  expect(await page.evaluate(() => (window as Window & { retained?: string }).retained)).toBe("yes");
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  expect(reads).toBe(1);
+  await expect(page).toHaveURL(/\/playlists\/list-1$/);
+});
+
+test("seguir un canal conserva búsqueda y scroll mientras se actualiza la lista", async ({ page }) => {
+  let releaseRefresh!: () => void;
+  const refresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let reads = 0;
+  await page.route("**/api/channels?excluded=false", async (route) => {
+    reads++;
+    if (reads > 1) await refresh;
+    return route.fulfill({ json: { items: Array.from({ length: 30 }, (_, index) => ({
+      id: `UC${String(index).padStart(22, "0")}`,
+      title: `Canal ${index}`, description: "", thumbnailUrl: "",
+      subscribed: reads > 1 && index === 10, excluded: false, lastSyncedAt: null,
+    })) } });
+  });
+  await page.route("**/api/subscriptions", (route) => route.fulfill({ json: { ok: true } }));
+  await page.goto("/channels");
+  await page.getByLabel("Buscar canales").fill("Canal");
+  const target = page.locator(".channel-card").nth(10);
+  await target.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await target.getByRole("button", { name: "Seguir", exact: true }).click();
+  await expect(target.getByRole("button", { name: "Siguiendo" })).toBeVisible();
+  await expect(page.locator(".channel-card")).toHaveCount(30);
+  await expect(page.getByLabel("Buscar canales")).toHaveValue("Canal");
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  releaseRefresh();
+  await expect.poll(() => reads).toBe(2);
+});
+
 test("selector de tipos, etiquetas y paginación", async ({ page }) => {
   const requests: URL[] = [];
   await page.route("**/api/feed?**", async (route) => {

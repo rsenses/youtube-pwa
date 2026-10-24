@@ -6,7 +6,7 @@
 import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
 import { cachedFeed, invalidateReads, feedRevision } from "./read-cache";
-import { deleteFeedThumbnail, deleteWatchedThumbnails, feedThumbnailPath, serveFeedThumbnail } from "./feed-thumbnails";
+import { deleteFeedThumbnail, deleteWatchedThumbnails, feedThumbnailPath, serveFeedThumbnail, warmKnownFeedThumbnail } from "./feed-thumbnails";
 import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
 import {
   ExternalError,
@@ -583,6 +583,7 @@ async function handleSetWatchState(ctx: RouteContext): Promise<Response> {
     account.id,
     videoId,
     videoScope(ctx),
+    !watched && !!ctx.env.FEED_IMAGES,
   );
   if (!updated)
     throw new HttpError(
@@ -590,6 +591,8 @@ async function handleSetWatchState(ctx: RouteContext): Promise<Response> {
       "INTERNAL",
       "The updated video could not be read back.",
     );
+  if (!watched && updated.feedEligible) await warmKnownFeedThumbnail(ctx.env, account.id, videoId);
+  delete updated.feedEligible;
   return json(updated);
 }
 

@@ -7,6 +7,16 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+test("marcar un vídeo cambia el botón sin mostrar un aviso de éxito", async ({ page }) => {
+  await page.goto("/watch/aqz-KE-bpKQ");
+  const button = page.locator(".watch-actions").getByRole("button", { name: /^(Visto|Marcar visto)$/ });
+  await expect(button).toBeVisible();
+  const before = await button.textContent();
+  await button.click();
+  await expect(button).not.toHaveText(before!);
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
+
 test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async ({ page }) => {
   const searched: string[] = [];
   const saved: string[] = [];
@@ -259,7 +269,11 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
       r.request().method() === "PUT",
   );
   await page.evaluate(() => {
-    (window as unknown as { __mock: { seconds: number } }).__mock.seconds = 30;
+    const mock = (window as unknown as {
+      __mock: { seconds: number; player: { opts: { events: { onStateChange: (event: { data: number }) => void } } } };
+    }).__mock;
+    mock.seconds = 30;
+    mock.player.opts.events.onStateChange({ data: 2 });
   });
   expect((await (await progressResponse).json()).positionSeconds).toBe(30);
   await page.setViewportSize({ width: 844, height: 390 });
@@ -304,7 +318,7 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   await expect(
     page.getByRole("button", { name: "Visto", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Cerrar aviso" }).click();
+  await expect(page.locator(".toast")).toHaveCount(0);
   await page.evaluate(() => {
     (window as any).__shared = [];
     Object.defineProperty(navigator, "share", {

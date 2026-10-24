@@ -19,40 +19,52 @@ async function eligibleAccounts(env: Env, videoId: string, accountId?: string): 
   return (rows.results || []).map((row) => row.id);
 }
 
+async function cacheThumbnail(env: Env, videoId: string, accounts: string[]): Promise<void> {
+  if (!env.FEED_IMAGES || !VIDEO_ID.test(videoId) || !accounts.length) return;
+  try {
+    const missing: string[] = [];
+    for (const id of accounts) if (!(await env.FEED_IMAGES.head(key(id, videoId)))) missing.push(id);
+    if (!missing.length) return;
+    const response = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok || !response.headers.get("content-type")?.startsWith("image/jpeg")) return;
+    const declared = Number(response.headers.get("content-length") || 0);
+    if (declared > MAX_IMAGE_BYTES || !response.body) return;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_IMAGE_BYTES) { await reader.cancel(); break; }
+      chunks.push(value);
+    }
+    if (!size || size > MAX_IMAGE_BYTES) return;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    for (const id of missing) {
+      await env.FEED_IMAGES.put(key(id, videoId), bytes, { httpMetadata: { contentType: "image/jpeg" } });
+    }
+  } catch (error) {
+    console.warn("Feed thumbnail cache failed", videoId, error);
+  }
+}
+
+/** The caller has already confirmed feed membership in its video read. */
+export async function warmKnownFeedThumbnail(env: Env, accountId: string, videoId: string): Promise<void> {
+  await cacheThumbnail(env, videoId, [accountId]);
+}
+
 /** Image failures never make video ingestion fail. A later image request retries. */
 export async function warmFeedThumbnails(env: Env, videoIds: string[], accountId?: string): Promise<void> {
   if (!env.FEED_IMAGES) return;
   for (const videoId of [...new Set(videoIds)]) {
     if (!VIDEO_ID.test(videoId)) continue;
     try {
-      const accounts = await eligibleAccounts(env, videoId, accountId);
-      const missing: string[] = [];
-      for (const id of accounts) if (!(await env.FEED_IMAGES.head(key(id, videoId)))) missing.push(id);
-      if (!missing.length) continue;
-      const response = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`, { signal: AbortSignal.timeout(5000) });
-      if (!response.ok || !response.headers.get("content-type")?.startsWith("image/jpeg")) continue;
-      const declared = Number(response.headers.get("content-length") || 0);
-      if (declared > MAX_IMAGE_BYTES) continue;
-      if (!response.body) continue;
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > MAX_IMAGE_BYTES) { await reader.cancel(); break; }
-        chunks.push(value);
-      }
-      if (!size || size > MAX_IMAGE_BYTES) continue;
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-      for (const id of missing) {
-        await env.FEED_IMAGES.put(key(id, videoId), bytes, { httpMetadata: { contentType: "image/jpeg" } });
-      }
+      await cacheThumbnail(env, videoId, await eligibleAccounts(env, videoId, accountId));
     } catch (error) {
-      console.warn("Feed thumbnail cache failed", videoId, error);
+      console.warn("Feed thumbnail eligibility failed", videoId, error);
     }
   }
 }
