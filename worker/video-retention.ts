@@ -1,5 +1,6 @@
 /** Weekly, global deletion of old watched videos. No per-account jobs or fanout. */
 import type { Env } from "./types";
+import { deleteVideoThumbnails } from "./feed-thumbnails";
 import { oldestVideoDate } from "./rss";
 import { isWebSubEnabled } from "./websub";
 
@@ -100,5 +101,6 @@ export async function runWeeklyVideoRetention(
     ),
   );
   const results = await env.DB.batch(statements);
+  if (rows.length) await deleteVideoThumbnails(env, (results[1].results || []).map((row) => (row as { id: string }).id));
   return rows.length ? results[1].results?.length || 0 : 0;
 }

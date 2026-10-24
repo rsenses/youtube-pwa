@@ -1,5 +1,6 @@
 /** One Queue message advances one durable, bounded step. No credentials in messages/state. */
 import type { AccountRow, Env } from "./types";
+import { deleteVideoThumbnails, warmFeedThumbnails } from "./feed-thumbnails";
 import { isWebSubEnabled } from "./websub";
 import { oldestVideoDate } from "./rss";
 import {
@@ -423,7 +424,10 @@ async function rssStep(env: Env, account: AccountRow, s: State) {
       ),
     );
   }
-  if (statements.length) await env.DB.batch(statements);
+  if (statements.length) {
+    await env.DB.batch(statements);
+    await warmFeedThumbnails(env, entries.filter((entry) => !existing.has(entry.videoId)).map((entry) => entry.videoId), account.id);
+  }
   feed.offset += entries.length;
   s.items += statements.length;
   if (feed.offset >= feed.entries.length) {
@@ -813,6 +817,12 @@ async function metadataStep(env: Env, account: AccountRow, s: State) {
       (e) => e.id && ids.includes(e.id) && e.status?.privacyStatus === "public",
     );
     for (const id of await storeVideos(env, entries)) seen.add(id);
+    if (env.FEED_IMAGES && seen.size) {
+      const stored = [...seen];
+      const shorts = await env.DB.prepare(`SELECT id FROM videos WHERE short_candidate=1 AND id IN (${stored.map(() => "?").join(",")})`)
+        .bind(...stored).all<{ id: string }>();
+      await deleteVideoThumbnails(env, (shorts.results || []).map((row) => row.id));
+    }
     const missing = ids.filter((id) => !seen.has(id));
     if (missing.length)
       await env.DB.batch(

@@ -9,6 +9,7 @@ import { isWebSubEnabled } from "./websub";
 import { oldestVideoDate } from "./rss";
 import { runChannelSync } from "./channel-sync";
 import { runWeeklyVideoRetention } from "./video-retention";
+import { warmFeedThumbnails } from "./feed-thumbnails";
 import type { AccountRow, Env, SyncRun } from "./types";
 import { privateVideoStatements } from "./private-metadata";
 import {
@@ -831,6 +832,7 @@ async function fetchAndStoreFeed(
       externalVideoStatement(env.DB, video, expiresAt, now, true),
     ),
   );
+  await warmFeedThumbnails(env, videos.map((video) => video.id), accountId);
   // Validators become reusable only after every durable write above succeeded
   // and the feed produced no incomplete entry that a 304 could hide.
   if (skipped === 0)

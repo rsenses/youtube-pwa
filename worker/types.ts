@@ -2,6 +2,7 @@
 export interface Env extends Omit<
   Cloudflare.Env,
   | "READ_CACHE"
+  | "FEED_IMAGES"
   | "MODE"
   | "APP_ORIGIN"
   | "SYNC_PROFILE"
@@ -13,6 +14,7 @@ export interface Env extends Omit<
   | "YOUTUBE_API_KEY"
 > {
   READ_CACHE?: KVNamespace;
+  FEED_IMAGES?: R2Bucket;
   MODE: "demo" | "real";
   /** Android beta: bounded RSS; subscription/playlist snapshots remain imported. */
   SYNC_PROFILE?: "free";

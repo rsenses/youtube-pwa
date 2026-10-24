@@ -24,6 +24,7 @@
       "migrations_dir": "migrations",
     },
   ],
+  "r2_buckets": [{ "binding": "FEED_IMAGES", "bucket_name": "alveo-feed-images" }],
   "queues": {
     "producers": [
       { "binding": "SYNC_QUEUE", "queue": "cauce-real-local-sync" },

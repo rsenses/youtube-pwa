@@ -6,6 +6,7 @@
 import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
 import { cachedFeed, invalidateReads, feedRevision } from "./read-cache";
+import { deleteFeedThumbnail, deleteWatchedThumbnails, feedThumbnailPath, serveFeedThumbnail } from "./feed-thumbnails";
 import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
 import {
   ExternalError,
@@ -505,7 +506,11 @@ async function handleFeed(ctx: RouteContext): Promise<Response> {
       };
     },
   );
-  return json(cached.value, 200, { "x-alveo-cache": cached.cache });
+  return json({ ...cached.value, items: cached.value.items.map((video) => ({
+    ...video,
+    thumbnailUrl: !video.watched && ctx.env.FEED_IMAGES && /^[A-Za-z0-9_-]{11}$/.test(video.id)
+      ? feedThumbnailPath(video.id) : video.thumbnailUrl,
+  })) }, 200, { "x-alveo-cache": cached.cache });
 }
 
 async function handleVideo(ctx: RouteContext): Promise<Response> {
@@ -572,6 +577,7 @@ async function handleSetWatchState(ctx: RouteContext): Promise<Response> {
     );
   }
   await setManualWatchState(ctx.env.DB, account.id, videoId, watched);
+  if (watched) await deleteFeedThumbnail(ctx.env, account.id, videoId);
   const updated = await getVideo(
     ctx.env.DB,
     account.id,
@@ -727,6 +733,7 @@ async function handleBulkWatch(ctx: RouteContext): Promise<Response> {
     before,
     watched,
   });
+  if (watched && updated) await deleteWatchedThumbnails(ctx.env, account.id);
   return json({ updated, scope, watched, mode: ctx.env.MODE });
 }
 
@@ -1520,6 +1527,10 @@ const ROUTES: Route[] = [
     },
   },
   { method: "GET", pattern: /^\/api\/feed$/, handler: handleFeed },
+  { method: "GET", pattern: /^\/api\/feed\/thumbnails\/([^/]+)$/, handler: async (ctx) => {
+    const account = requireAccount(ctx);
+    return serveFeedThumbnail(ctx.env, account.id, routeParam(ctx, 0, "videoId"));
+  } },
   {
     method: "GET",
     pattern: /^\/api\/feed\/revision$/,
@@ -1721,6 +1732,7 @@ async function dispatchApi(
   const account = await getSessionAccount(env, context.session);
   const metadataRead =
     method === "GET" &&
+    !url.pathname.startsWith("/api/feed/thumbnails/") &&
     !url.pathname.endsWith("/sync") &&
     ![
       "/api/session",

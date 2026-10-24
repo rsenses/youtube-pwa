@@ -13,6 +13,7 @@
  * raw <updated> and watched/playlist eligibility rules cannot diverge.
  */
 import type { Env } from "./types";
+import { warmFeedThumbnails } from "./feed-thumbnails";
 import {
   HttpError,
   bytesToBase64Url,
@@ -1030,6 +1031,9 @@ export async function ingestParsedEntries(
     // last-unsubscribe gate; neither produced visible metadata.
     summary.skipped += noops.length;
   }
+  await warmFeedThumbnails(env, actions.filter((action) =>
+    action.kind !== "stamp" && (results[action.index]?.meta.changes ?? 0) > 0,
+  ).map((action) => action.videoId));
   return summary;
 }
 

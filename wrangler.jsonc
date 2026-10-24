@@ -26,6 +26,7 @@
     "migrations_dir":"migrations"
   }],
   "kv_namespaces":[{"binding":"READ_CACHE","id":"dc2b548a8f094c0eb1eff277345ef4e3"}],
+  "r2_buckets":[{"binding":"FEED_IMAGES","bucket_name":"alveo-feed-images"}],
   "queues": {
     "producers":[{"binding":"SYNC_QUEUE","queue":"alveo-sync"}],
     "consumers":[{"queue":"alveo-sync","max_batch_size":1,"max_batch_timeout":0,"max_concurrency":1,"max_retries":5}]

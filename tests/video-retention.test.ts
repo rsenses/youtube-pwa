@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import type { Env } from "../worker/types";
 import { runWeeklyVideoRetention } from "../worker/video-retention";
+import { warmFeedThumbnails, deleteFeedThumbnail } from "../worker/feed-thumbnails";
 import { externalVideoStatement, purgeExpiredMetadata } from "../worker/db";
 
 const SECRET = "fixture-websub-secret-not-a-real-credential";
@@ -351,6 +352,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await resetDatabase();
+  env.FEED_IMAGES = undefined;
 });
 
 afterAll(async () => {
@@ -358,6 +360,25 @@ afterAll(async () => {
 });
 
 describe("weekly global video retention", () => {
+  it("stores images only for connected pending feed subscriptions and removes one account copy", async () => {
+    await seedFollowers("UCimage", ["pending", "seen"]);
+    await insertVideo("imagevid001", "UCimage", RECENT);
+    await setWatch("seen", "imagevid001", 1, 1, 100);
+    const put = vi.fn().mockResolvedValue(undefined);
+    const remove = vi.fn().mockResolvedValue(undefined);
+    env.FEED_IMAGES = { head: vi.fn().mockResolvedValue(null), put, delete: remove } as unknown as R2Bucket;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "image/jpeg" },
+    }));
+    try { await warmFeedThumbnails(env, ["imagevid001"]); }
+    finally { globalThis.fetch = originalFetch; }
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(put.mock.calls[0][0]).toBe("v1/pending/imagevid001");
+    await deleteFeedThumbnail(env, "pending", "imagevid001");
+    expect(remove).toHaveBeenCalledWith("v1/pending/imagevid001");
+  });
+
   it("discards an untouched short candidate after 30 days without marking it watched", async () => {
     const channelId = "UCshortage";
     await seedFollowers(channelId, ["short-owner"]);
@@ -368,7 +389,11 @@ describe("weekly global video retention", () => {
     await purgeExpiredMetadata(db, NOW);
     expect((await db.prepare("SELECT short_candidate,duration_seconds FROM videos WHERE id='shortold0001'").first<{short_candidate:number;duration_seconds:number|null}>())?.short_candidate).toBe(1);
 
+    const removeImage = vi.fn().mockResolvedValue(undefined);
+    env.FEED_IMAGES = { delete: removeImage } as unknown as R2Bucket;
+
     expect(await runWeeklyVideoRetention(env, NOW)).toBeGreaterThan(0);
+    expect(removeImage).toHaveBeenCalledWith(["v1/short-owner/shortold0001"]);
     expect(await videoIds()).toEqual([]);
     expect((await db.prepare("SELECT video_id FROM short_video_tombstones WHERE video_id='shortold0001'").first())?.video_id).toBe("shortold0001");
     expect(await watchRow("short-owner", "shortold0001")).toBeNull();

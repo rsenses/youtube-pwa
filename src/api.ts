@@ -51,6 +51,7 @@ export async function api<T>(
 }
 export const videoUrl = (id: string) => `/watch/${encodeURIComponent(id)}`;
 export function videoThumbnail(video: Video): string {
+  if (video.thumbnailUrl.startsWith("/api/feed/thumbnails/")) return video.thumbnailUrl;
   // The video id is authoritative. Previously stored Atom images can be shared
   // between unrelated entries, so avoid displaying those cached URLs.
   return /^[A-Za-z0-9_-]{11}$/.test(video.id) && !video.thumbnailUrl.startsWith("/thumbs/")
