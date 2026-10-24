@@ -604,6 +604,7 @@ label > textarea {
 .swipe-feedback {
     position: absolute;
     inset: 0;
+    border-radius: inherit;
     display: flex;
     align-items: center;
     gap: 10px;
