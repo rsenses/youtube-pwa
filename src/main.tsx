@@ -742,18 +742,18 @@ function Feed() {
           if (changed) setVersion((v) => v + 1);
         }
       } catch {
-        // Normal feed requests keep reporting errors; background polling retries.
+        // A later visit or focus will retry; feed requests report their own errors.
       } finally {
         checking = false;
       }
     };
     void check();
-    const timer = setInterval(check, 60000);
     document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
     return () => {
       controller.abort();
-      clearInterval(timer);
       document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
     };
   }, [session.capabilities.automaticDiscovery]);
   const query = new URLSearchParams({

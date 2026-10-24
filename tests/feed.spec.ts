@@ -99,6 +99,9 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
   await expect(page.getByRole("heading", { name: "Llegada new" })).toBeVisible();
   await expect(page.locator(".video-card")).toHaveCount(2);
   await expect(page.getByRole("heading", { name: "Llegada first" })).toHaveCount(0);
+  revision = "focused";
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { name: "Llegada focused" })).toBeVisible();
 });
 
 test("el swipe muestra la acción detrás y saca la tarjeta sin rebote", async ({ page }) => {
