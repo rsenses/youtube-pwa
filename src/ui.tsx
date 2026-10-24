@@ -149,6 +149,7 @@ export function VideoCard({
     onChange,
     compact = false,
     swipeToWatch = false,
+    eagerThumbnail = false,
     extra,
     action,
     renderAction,
@@ -157,6 +158,7 @@ export function VideoCard({
     onChange?: (v: Video) => void;
     compact?: boolean;
     swipeToWatch?: boolean;
+    eagerThumbnail?: boolean;
     extra?: ReactNode;
     action?: ReactNode;
     renderAction?: (controls: { toggleWatched: () => void; busy: boolean }) => ReactNode;
@@ -253,7 +255,8 @@ export function VideoCard({
                 <img
                     src={videoThumbnail(video)}
                     alt=""
-                    loading="lazy"
+                    loading={eagerThumbnail ? "eager" : "lazy"}
+                    fetchPriority={eagerThumbnail ? "high" : undefined}
                 />
                 <span className="play-hover">
                     <Icon name="play" size={28} />

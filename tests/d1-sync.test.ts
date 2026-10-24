@@ -146,7 +146,9 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const url = new URL(input);
       calls.push(url.pathname);
       if (url.pathname.endsWith("/channels")) return Response.json({ items: [{
-        id: channelId, contentDetails: { relatedPlaylists: { uploads: "UUarchive" } },
+        id: channelId,
+        snippet: { title: "Archive", description: "Public archive" },
+        contentDetails: { relatedPlaylists: { uploads: "UUarchive" } },
       }] });
       if (url.pathname.endsWith("/playlistItems")) {
         expect(url.searchParams.get("maxResults")).toBe("18");
@@ -165,6 +167,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     }));
     try {
       const first = await listPublicChannelVideos(env, account.id, channelId);
+      expect(first.channel).toMatchObject({ id: channelId, title: "Archive", description: "Public archive" });
       expect(first.items).toHaveLength(18);
       expect(first.items[0]).toMatchObject({ watched: true, transient: false });
       expect(first.items[1]).toMatchObject({ watched: false, transient: true });
@@ -180,6 +183,56 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         .bind("2026-10-23T00:00:00Z", ids[0]).run();
       const purged = await listPublicChannelVideos(env, account.id, channelId);
       expect(purged.items[0]).toMatchObject({ watched: true, transient: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("opens an unsaved public channel without inserting channel or video rows", async () => {
+    const channelId = "UC" + "z".repeat(22);
+    const videoId = "public00001";
+    const calls: string[] = [];
+    const kv = new Map<string, string>();
+    env.YOUTUBE_API_KEY = "unit-test-key-only";
+    env.READ_CACHE = {
+      get: async (key: string) => kv.get(key) ?? null,
+      put: async (key: string, value: string) => { kv.set(key, value); },
+    } as unknown as KVNamespace;
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      const url = new URL(input);
+      calls.push(url.pathname);
+      if (url.pathname.endsWith("/channels")) return Response.json({ items: [{
+        id: channelId,
+        snippet: { title: "Unsaved channel", description: "From YouTube" },
+        contentDetails: { relatedPlaylists: { uploads: "UUunsaved" } },
+      }] });
+      if (url.pathname.endsWith("/playlistItems")) return Response.json({
+        items: [{ contentDetails: { videoId } }],
+      });
+      if (url.pathname.endsWith("/videos")) return Response.json({ items: [{
+        id: videoId,
+        snippet: { title: "Public video", channelId, channelTitle: "Unsaved channel",
+          description: "", publishedAt: "2020-01-01T00:00:00Z", liveBroadcastContent: "none" },
+        status: { privacyStatus: "public", embeddable: true },
+        contentDetails: { duration: "PT5M" },
+      }] });
+      throw new Error("Unexpected endpoint");
+    }));
+    const { token } = await insertSession(env.DB, account.id);
+    try {
+      const request = () => new Request(`${env.APP_ORIGIN}/api/channels/${channelId}/videos?limit=18`, {
+        headers: { cookie: `${SESSION_COOKIE}=${token}` },
+      });
+      const first = await worker.fetch(request(), env);
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({
+        channel: { id: channelId, title: "Unsaved channel", description: "From YouTube" },
+        items: [{ id: videoId, transient: true }],
+      });
+      expect(await env.DB.prepare("SELECT id FROM channels WHERE id=?").bind(channelId).first()).toBeNull();
+      expect(await env.DB.prepare("SELECT id FROM videos WHERE id=?").bind(videoId).first()).toBeNull();
+      const callCount = calls.length;
+      expect((await worker.fetch(request(), env)).status).toBe(200);
+      expect(calls).toHaveLength(callCount);
     } finally {
       vi.unstubAllGlobals();
     }

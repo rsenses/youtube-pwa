@@ -796,6 +796,13 @@ async function handleChannelExclusion(ctx: RouteContext): Promise<Response> {
 async function handleChannelVideos(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   const channelId = routeParam(ctx, 0, "channelId");
+  if (ctx.env.YOUTUBE_API_KEY) {
+    const limit = parseLimit(ctx.url, 18, 50);
+    const cursor = assertPageToken(ctx.url.searchParams.get("cursor"));
+    return json(await listPublicChannelVideos(
+      ctx.env, account.id, channelId, cursor || undefined, limit,
+    ));
+  }
   const channel = await getChannelRow(ctx.env.DB, channelId);
   const expectedSource = videoScope(ctx) === "fixture" ? "fixture" : "youtube";
   if (!channel || channel.purged_at || channel.source !== expectedSource) {
@@ -804,13 +811,6 @@ async function handleChannelVideos(ctx: RouteContext): Promise<Response> {
       "CHANNEL_NOT_FOUND",
       "Channel not found or its metadata expired.",
     );
-  }
-  if (ctx.env.YOUTUBE_API_KEY) {
-    const limit = parseLimit(ctx.url, 18, 50);
-    const cursor = assertPageToken(ctx.url.searchParams.get("cursor"));
-    return json(await listPublicChannelVideos(
-      ctx.env, account.id, channelId, cursor || undefined, limit,
-    ));
   }
   const status = parseEnum(
     ctx.url.searchParams.get("status") ?? "all",

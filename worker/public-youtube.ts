@@ -435,6 +435,61 @@ export async function searchPublicVideos(
   return value;
 }
 
+interface PublicChannelSummary {
+  id: string;
+  title: string;
+  description: string;
+  thumbnailUrl: string;
+}
+
+interface PublicChannelProfile extends PublicChannelSummary {
+  uploads: string;
+}
+
+interface PublicChannelPage {
+  channel: PublicChannelSummary;
+  items: Video[];
+  nextCursor: string | null;
+}
+
+function isChannelSummary(value: unknown, channelId: string): value is PublicChannelSummary {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Partial<PublicChannelSummary>;
+  return profile.id === channelId && typeof profile.title === "string" &&
+    typeof profile.description === "string" && typeof profile.thumbnailUrl === "string";
+}
+
+function isChannelProfile(value: unknown, channelId: string): value is PublicChannelProfile {
+  return isChannelSummary(value, channelId) &&
+    "uploads" in value && typeof value.uploads === "string" && value.uploads.length > 0;
+}
+
+async function publicChannelProfile(env: Env, channelId: string): Promise<PublicChannelProfile> {
+  const key = `youtube-channel-profile:v1:${channelId}`;
+  try {
+    const raw = await env.READ_CACHE?.get(key);
+    if (raw) {
+      const cached: unknown = JSON.parse(raw);
+      if (isChannelProfile(cached, channelId)) return cached;
+    }
+  } catch { /* Optional cache. */ }
+  const result = await youtubeListChannels(credential(env), { id: channelId, includeUploads: true });
+  if (!Array.isArray(result.items)) throw new ExternalError("invalid_response");
+  const item = result.items.find((entry) => entry.id === channelId);
+  const uploads = item?.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploads) throw new HttpError(404, "CHANNEL_NOT_FOUND", "Canal no disponible en YouTube.");
+  const profile: PublicChannelProfile = {
+    id: channelId,
+    title: sanitizeText(item?.snippet?.title, 300) || channelId,
+    description: sanitizeText(item?.snippet?.description, 5000),
+    thumbnailUrl: pickThumbnailUrl(item?.snippet?.thumbnails),
+    uploads,
+  };
+  try { await env.READ_CACHE?.put(key, JSON.stringify(profile), { expirationTtl: 86400 }); }
+  catch { /* Optional cache. */ }
+  return profile;
+}
+
 /** A channel's public uploads, fetched on demand without importing its history. */
 export async function listPublicChannelVideos(
   env: Env,
@@ -442,39 +497,30 @@ export async function listPublicChannelVideos(
   channelId: string,
   pageToken?: string,
   limit = 18,
-): Promise<{ items: Video[]; nextCursor: string | null }> {
+): Promise<PublicChannelPage> {
   if (!CHANNEL_ID.test(channelId))
     throw new HttpError(400, "INVALID_CHANNEL_ID", "Identificador de canal inválido.");
-  const pageKey = `youtube-channel-page:v1:${channelId}:${limit}:${pageToken || "first"}`;
-  let page: { items: Video[]; nextCursor: string | null } | null = null;
+  const pageKey = `youtube-channel-page:v2:${channelId}:${limit}:${pageToken || "first"}`;
+  let page: PublicChannelPage | null = null;
   try {
     const raw = await env.READ_CACHE?.get(pageKey);
     if (raw) {
       const cached: unknown = JSON.parse(raw);
-      if (cached && typeof cached === "object" && "items" in cached &&
+      if (cached && typeof cached === "object" && "channel" in cached &&
+        isChannelSummary(cached.channel, channelId) &&
+        "items" in cached &&
         Array.isArray(cached.items) && cached.items.length <= limit &&
         cached.items.every((item: unknown) => item && typeof item === "object" &&
           "id" in item && typeof item.id === "string" && VIDEO_ID.test(item.id) &&
           "transient" in item && item.transient === true) &&
         "nextCursor" in cached &&
         (cached.nextCursor === null || typeof cached.nextCursor === "string")) {
-        page = cached as { items: Video[]; nextCursor: string | null };
+        page = cached as PublicChannelPage;
       }
     }
   } catch { /* Optional cache. */ }
   if (!page) {
-    const uploadsKey = `youtube-channel-uploads:v1:${channelId}`;
-    let uploads: string | null = null;
-    try { uploads = (await env.READ_CACHE?.get(uploadsKey)) || null; }
-    catch { /* Optional cache. */ }
-    if (!uploads) {
-      const channel = await youtubeListChannels(credential(env), { id: channelId, includeUploads: true });
-      if (!Array.isArray(channel.items)) throw new ExternalError("invalid_response");
-      uploads = channel.items.find((item) => item.id === channelId)?.contentDetails?.relatedPlaylists?.uploads || null;
-      if (!uploads) throw new HttpError(404, "CHANNEL_NOT_FOUND", "Canal no disponible en YouTube.");
-      try { await env.READ_CACHE?.put(uploadsKey, uploads, { expirationTtl: 86400 }); }
-      catch { /* Optional cache. */ }
-    }
+    const { uploads, ...channel } = await publicChannelProfile(env, channelId);
     const entries = await listPlaylistItems(credential(env), uploads, pageToken, limit);
     if (!Array.isArray(entries.items)) throw new ExternalError("invalid_response");
     const ids = [...new Set(entries.items.map((item) => item.contentDetails?.videoId)
@@ -483,6 +529,7 @@ export async function listPublicChannelVideos(
     if (!Array.isArray(details.items)) throw new ExternalError("invalid_response");
     const byId = new Map(details.items.map((item) => [item.id, publicPreview(item)]));
     page = {
+      channel,
       items: ids.map((id) => byId.get(id)).filter((video): video is Video =>
         video != null && video.channelId === channelId),
       nextCursor: typeof entries.nextPageToken === "string" ? entries.nextPageToken : null,
@@ -492,6 +539,7 @@ export async function listPublicChannelVideos(
   }
   const states = await getKnownVideoStates(env.DB, accountId, page.items.map((video) => video.id));
   return {
+    channel: page.channel,
     items: page.items.map((video) => {
       const state = states.get(video.id);
       if (!state) return video;

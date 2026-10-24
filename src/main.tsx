@@ -720,6 +720,7 @@ function Feed() {
   const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
   const { notify, session } = useApp();
   const loadGeneration = useRef(0);
+  const loadedQuery = useRef<string | null>(null);
   useEffect(() => {
     if (!session.capabilities.automaticDiscovery) return;
     let revision: string | null = null;
@@ -735,10 +736,10 @@ function Feed() {
           undefined,
           controller.signal,
         );
-        if (!controller.signal.aborted && revision !== next.revision) {
+        if (!controller.signal.aborted) {
+          const changed = revision !== null && revision !== next.revision;
           revision = next.revision;
-          // Reset pagination rather than mixing pages from different revisions.
-          setVersion((v) => v + 1);
+          if (changed) setVersion((v) => v + 1);
         }
       } catch {
         // Normal feed requests keep reporting errors; background polling retries.
@@ -771,8 +772,11 @@ function Feed() {
   useEffect(() => {
     loadGeneration.current++;
     let active = true;
+    const queryChanged = loadedQuery.current !== query;
+    loadedQuery.current = query;
     setBusy(true);
-    setVideos([]);
+    // Keep the current cards visible while checking a newer feed revision.
+    if (queryChanged) setVideos([]);
     setCursor(null);
     setError("");
     api<{ items: Video[]; nextCursor: string | null }>(`/api/feed?${query}`)
@@ -974,8 +978,8 @@ function Feed() {
           </State>
         )}
         <div className="video-grid">
-          {videos.map((v) => (
-            <VideoOptionsCard key={v.id} video={v} onChange={change} swipeToWatch />
+          {videos.map((v, index) => (
+            <VideoOptionsCard key={v.id} video={v} onChange={change} swipeToWatch eagerThumbnail={index < 3} />
           ))}
         </div>
         {busy && !videos.length && (
@@ -1028,10 +1032,11 @@ function Feed() {
     </>
   );
 }
-function VideoOptionsCard({ video, onChange, swipeToWatch = false, extra }: {
+function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnail = false, extra }: {
   video: Video;
   onChange: (video: Video) => void;
   swipeToWatch?: boolean;
+  eagerThumbnail?: boolean;
   extra?: ReactNode;
 }) {
   const [save, setSave] = useState(false);
@@ -1053,7 +1058,7 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, extra }: {
     };
   }, [open]);
   return <div className="video-options-result">
-    <VideoCard video={video} onChange={onChange} swipeToWatch={swipeToWatch} extra={extra} renderAction={({ toggleWatched, busy }) =>
+    <VideoCard video={video} onChange={onChange} swipeToWatch={swipeToWatch} eagerThumbnail={eagerThumbnail} extra={extra} renderAction={({ toggleWatched, busy }) =>
       <div className="video-card-menu" ref={menu}>
         <button className="icon-button" aria-label={`Opciones de ${video.title}`}
           aria-expanded={open} title="Opciones del vídeo" onClick={() => setOpen((value) => !value)}>
@@ -1208,9 +1213,20 @@ function Channels() {
 }
 function ChannelPage() {
   const { id } = useParams();
+  return <ChannelPageContent key={id} id={id!} />;
+}
+type ChannelVideoPage = {
+  channel?: Pick<Channel, "id" | "title" | "description" | "thumbnailUrl">;
+  items: Video[];
+  nextCursor: string | null;
+};
+function ChannelPageContent({ id }: { id: string }) {
   const { session } = useApp();
   const { data: channels } = useResource<{ items: Channel[] }>("/api/channels");
-  const channel = channels?.items.find((c) => c.id === id);
+  const { data, error, loading } = useResource<ChannelVideoPage>(
+    `/api/channels/${id}/videos?limit=18`,
+  );
+  const channel = data?.channel || channels?.items.find((c) => c.id === id);
   return (
     <>
       <Link to="/channels" className="back-link">
@@ -1218,7 +1234,7 @@ function ChannelPage() {
       </Link>
       <PageHeading
         title={channel?.title || "Canal"}
-        action={<SubscribeChannel key={id} channelId={id!} />}
+        action={<SubscribeChannel channelId={id} />}
         description={
           channel?.description ||
           (session.capabilities.publicData
@@ -1226,20 +1242,21 @@ function ChannelPage() {
             : "Vídeos de este canal guardados en la biblioteca.")
         }
       />
-      <ChannelVideos key={id} id={id!} />
+      <ChannelVideos id={id} data={data} error={error} loading={loading} />
     </>
   );
 }
-function ChannelVideos({ id }: { id: string }) {
+function ChannelVideos({ id, data, error, loading }: {
+  id: string;
+  data: ChannelVideoPage | null;
+  error: string;
+  loading: boolean;
+}) {
   const [extra, setExtra] = useState<Video[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [moreError, setMoreError] = useState(""),
     [updates, setUpdates] = useState<Record<string, Video>>({});
-  const { data, error, loading } = useResource<{
-    items: Video[];
-    nextCursor: string | null;
-  }>(`/api/channels/${id}/videos?limit=18`);
   useEffect(() => {
     setExtra([]);
     setCursor(data?.nextCursor || null);

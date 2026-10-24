@@ -24,6 +24,8 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
 }) => {
   let revision = "first";
   let polls = 0;
+  let firstPageRequests = 0;
+  let releaseRefresh!: () => void;
   await page.route("**/api/session", (route) =>
     route.fulfill({
       json: {
@@ -49,8 +51,12 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
     polls++;
     return route.fulfill({ json: { revision } });
   });
-  await page.route("**/api/feed?**", (route) => {
+  await page.route("**/api/feed?**", async (route) => {
     const more = new URL(route.request().url()).searchParams.has("cursor");
+    if (!more) firstPageRequests++;
+    if (!more && revision === "new") {
+      await new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    }
     return route.fulfill({
       json: {
         items: [
@@ -68,6 +74,7 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
     page.getByRole("heading", { name: "Llegada first" }),
   ).toBeVisible();
   await expect.poll(() => polls).toBe(1);
+  expect(firstPageRequests).toBe(1);
   await expect(page.locator(".video-card")).toHaveCount(2);
   revision = "new";
   await page.evaluate(() => {
@@ -86,9 +93,10 @@ test("WebSub refresca el feed al volver visible y reinicia la paginación", asyn
     });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect(
-    page.getByRole("heading", { name: "Llegada new" }),
-  ).toBeVisible();
+  await expect.poll(() => firstPageRequests).toBe(2);
+  await expect(page.getByRole("heading", { name: "Llegada first" })).toBeVisible();
+  releaseRefresh();
+  await expect(page.getByRole("heading", { name: "Llegada new" })).toBeVisible();
   await expect(page.locator(".video-card")).toHaveCount(2);
   await expect(page.getByRole("heading", { name: "Llegada first" })).toHaveCount(0);
 });
@@ -233,6 +241,13 @@ test("feed de 18, paginación y cabecera sin estado duplicado", async ({
   });
   await page.goto("/feed");
   await expect(page.locator(".video-card")).toHaveCount(18);
+  await expect(page.locator('link[rel="preconnect"][href="https://i.ytimg.com"]')).toHaveCount(1);
+  const thumbnails = page.locator(".video-card .thumbnail img");
+  for (let index = 0; index < 3; index++) {
+    await expect(thumbnails.nth(index)).toHaveAttribute("loading", "eager");
+    await expect(thumbnails.nth(index)).toHaveAttribute("fetchpriority", "high");
+  }
+  await expect(thumbnails.nth(3)).toHaveAttribute("loading", "lazy");
   expect(requests[0]?.searchParams.get("types")).toBe("video,live");
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.locator(".local-badge")).toHaveCount(0);
@@ -348,6 +363,20 @@ test("canal muestra 18 subidas y pagina vídeos antiguos", async ({ page }) => {
   await expect(page.locator(".video-card")).toHaveCount(19);
   expect(requests[1].searchParams.get("cursor")).toBe("NEXT");
   expect(requests[1].searchParams.get("limit")).toBe("18");
+});
+
+test("canal no guardado muestra los metadatos públicos", async ({ page }) => {
+  const channelId = `UC${"u".repeat(22)}`;
+  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route(`**/api/channels/${channelId}/videos?**`, (route) => route.fulfill({ json: {
+    channel: { id: channelId, title: "Canal público", description: "Descripción pública", thumbnailUrl: "" },
+    items: [feedItem("public", "Vídeo público", { channelId, transient: true })],
+    nextCursor: null,
+  } }));
+  await page.goto(`/channels/${channelId}`);
+  await expect(page.getByRole("heading", { name: "Canal público" })).toBeVisible();
+  await expect(page.getByText("Descripción pública")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Vídeo público" })).toBeVisible();
 });
 
 test("lista conserva quitar y ofrece el menú de vídeo", async ({ page }) => {
