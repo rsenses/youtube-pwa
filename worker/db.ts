@@ -36,7 +36,7 @@ const ACCOUNT_VIDEO_CONDITION = `(pm.video_id IS NOT NULL OR (v.purged_at IS NUL
   OR EXISTS (SELECT 1 FROM public_read_cache pc WHERE pc.cache_key='public-video:' || v.id
     AND pc.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')))))`;
 
-const DEFAULT_SETTINGS: Settings = { theme: "system" };
+const DEFAULT_SETTINGS: Settings = { theme: "system", pureBlack: false };
 
 export function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -241,14 +241,14 @@ export async function getPreferences(
 ): Promise<Settings> {
   const row = await db
     .prepare(
-      "SELECT theme FROM preferences WHERE account_id = ?",
+      "SELECT theme, pure_black FROM preferences WHERE account_id = ?",
     )
     .bind(accountId)
-    .first<{ theme: string }>();
+    .first<{ theme: string; pure_black: number }>();
   if (!row) return { ...DEFAULT_SETTINGS };
   const theme =
     row.theme === "light" || row.theme === "dark" ? row.theme : "system";
-  return { theme };
+  return { theme, pureBlack: row.pure_black === 1 };
 }
 
 export async function savePreferences(
@@ -259,13 +259,14 @@ export async function savePreferences(
 ): Promise<Settings> {
   await db
     .prepare(
-      `INSERT INTO preferences (account_id, theme, updated_at)
-       VALUES (?, ?, ?)
+      `INSERT INTO preferences (account_id, theme, pure_black, updated_at)
+       VALUES (?, ?, ?, ?)
        ON CONFLICT(account_id) DO UPDATE SET
          theme = excluded.theme,
+         pure_black = excluded.pure_black,
          updated_at = excluded.updated_at`,
     )
-    .bind(accountId, settings.theme, now)
+    .bind(accountId, settings.theme, settings.pureBlack ? 1 : 0, now)
     .run();
   return settings;
 }

@@ -164,6 +164,10 @@ test("navegación, listas persistentes, ajustes y errores de escritura", async (
   await page.getByRole("button", { name: "Confirmar eliminación" }).click();
   await expect(page).toHaveURL(/\/playlists$/);
   await page.goto("/settings");
+  if (await page.getByRole("checkbox", { name: /Negro puro/ }).isChecked()) {
+    await page.getByRole("checkbox", { name: /Negro puro/ }).click();
+    await expect(page.getByRole("checkbox", { name: /Negro puro/ })).not.toBeChecked();
+  }
   await page.getByRole("button", { name: "Oscuro", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("body")).toHaveCSS(
@@ -174,8 +178,13 @@ test("navegación, listas persistentes, ajustes y errores de escritura", async (
     "content",
     "#1c1918",
   );
+  await page.getByRole("checkbox", { name: /Negro puro/ }).click();
+  await expect(page.getByRole("checkbox", { name: /Negro puro/ })).toBeChecked();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "black");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(0, 0, 0)");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#000");
   await page.reload();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "black");
   await page.getByRole("button", { name: "Sistema", exact: true }).click();
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("body")).toHaveCSS(
@@ -187,14 +196,15 @@ test("navegación, listas persistentes, ajustes y errores de escritura", async (
     "#f3f0eb",
   );
   await page.emulateMedia({ colorScheme: "dark" });
-  await expect(page.locator("body")).toHaveCSS(
-    "background-color",
-    "rgb(28, 25, 24)",
-  );
-  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute(
-    "content",
-    "#1c1918",
-  );
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(0, 0, 0)");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#000");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "system");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(0, 0, 0)");
+  await page.getByRole("checkbox", { name: /Negro puro/ }).click();
+  await expect(page.getByRole("checkbox", { name: /Negro puro/ })).not.toBeChecked();
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(28, 25, 24)");
   await page.emulateMedia({ colorScheme: "light" });
   const rejected = await page.evaluate(async () => {
     const r = await fetch("/api/settings", {

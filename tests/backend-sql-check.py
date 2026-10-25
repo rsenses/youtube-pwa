@@ -263,6 +263,12 @@ def main() -> int:
     except sqlite3.IntegrityError:
         invalid_theme = True
     check(invalid_theme, "invalid theme was accepted")
+    invalid_pure_black = False
+    try:
+        db.execute("UPDATE preferences SET pure_black=2 WHERE account_id='demo'")
+    except sqlite3.IntegrityError:
+        invalid_pure_black = True
+    check(invalid_pure_black, "invalid pure-black preference was accepted")
     invalid_threshold = False
     try:
         db.execute("UPDATE preferences SET watch_threshold=0 WHERE account_id='demo'")

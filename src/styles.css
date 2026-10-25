@@ -30,7 +30,8 @@
 @view-transition {
     navigation: auto;
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-theme="black"] {
     --bg: #1c1918;
     --surface: #262120;
     --surface-2: #332c2a;
@@ -45,6 +46,12 @@
     --warning: #fdd663;
     --shadow: none;
     color-scheme: dark;
+}
+:root[data-theme="black"] {
+    --bg: #000;
+    --surface: #101010;
+    --surface-2: #1d1d1d;
+    --border: #3b3636;
 }
 @media (prefers-color-scheme: dark) {
     :root[data-theme="system"] {
@@ -62,6 +69,12 @@
         --warning: #fdd663;
         --shadow: none;
         color-scheme: dark;
+    }
+    :root[data-theme="system"][data-pure-black="true"] {
+        --bg: #000;
+        --surface: #101010;
+        --surface-2: #1d1d1d;
+        --border: #3b3636;
     }
 }
 * {
@@ -1313,6 +1326,15 @@ label > textarea {
     background: var(--green-soft);
     color: var(--green);
 }
+.pure-black-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    cursor: pointer;
+}
+.pure-black-option input { width: 18px; height: 18px; accent-color: var(--green); }
+.pure-black-option small { display: block; color: var(--muted); margin-top: 2px; }
 .settings-buttons {
     display: flex;
     gap: 8px;

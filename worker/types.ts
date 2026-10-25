@@ -79,6 +79,7 @@ export interface PlaylistDetail extends PlaylistSummary {
 
 export interface Settings {
   theme: "system" | "light" | "dark";
+  pureBlack: boolean;
 }
 
 export interface SessionInfo {

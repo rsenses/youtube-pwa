@@ -426,6 +426,7 @@ async function handlePatchSettings(ctx: RouteContext): Promise<Response> {
   let changed = false;
 
   let theme = current.theme;
+  let pureBlack = current.pureBlack;
   if ("theme" in body) {
     if (body.theme === null) {
       throw new HttpError(
@@ -442,10 +443,15 @@ async function handlePatchSettings(ctx: RouteContext): Promise<Response> {
     changed = true;
   }
 
-  if (!changed) {
-    throw new HttpError(400, "VALIDATION_ERROR", "Provide theme.");
+  if ("pureBlack" in body) {
+    pureBlack = requiredBoolean(body, "pureBlack");
+    changed = true;
   }
-  return json(await savePreferences(ctx.env.DB, account.id, { theme }));
+
+  if (!changed) {
+    throw new HttpError(400, "VALIDATION_ERROR", "Provide theme or pureBlack.");
+  }
+  return json(await savePreferences(ctx.env.DB, account.id, { theme, pureBlack }));
 }
 
 /* ------------------------------------------------------------------ */

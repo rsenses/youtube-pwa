@@ -62,7 +62,7 @@ function matchesSearch(query: string, ...values: string[]) {
 }
 function App() {
   const [session, sessionSet] = useState<SessionInfo | null>(null),
-    [settings, settingsSet] = useState<Settings>({ theme: "system" }),
+    [settings, settingsSet] = useState<Settings>({ theme: "system", pureBlack: false }),
     [error, errorSet] = useState(""),
     [toast, toastSet] = useState("");
   const location = useLocation();
@@ -88,7 +88,9 @@ function App() {
     refreshSession().catch((e) => errorSet(e.message));
   }, [refreshSession]);
   useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme;
+    document.documentElement.dataset.theme =
+      settings.theme === "dark" && settings.pureBlack ? "black" : settings.theme;
+    document.documentElement.dataset.pureBlack = String(settings.pureBlack);
     const meta = document.querySelector('meta[name="theme-color"]');
     const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
     const updateChromeColor = () =>
@@ -101,7 +103,7 @@ function App() {
     updateChromeColor();
     systemTheme.addEventListener("change", updateChromeColor);
     return () => systemTheme.removeEventListener("change", updateChromeColor);
-  }, [settings.theme]);
+  }, [settings.theme, settings.pureBlack]);
   useEffect(() => {
     if (toast) {
       const t = setTimeout(() => toastSet(""), 4000);
@@ -1940,6 +1942,12 @@ function SettingsPage() {
               </button>
             ))}
           </div>
+          <label className="pure-black-option">
+            <input type="checkbox" checked={settings.pureBlack}
+              onChange={(event) => updateSettings({ pureBlack: event.target.checked })
+                .catch((e) => notify(e.message))} />
+            <span>Negro puro <small>Cuando el tema sea oscuro, también en modo Sistema.</small></span>
+          </label>
         </section>
         <section className="settings-card">
           <h2>Sincronización</h2>
