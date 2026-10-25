@@ -1397,18 +1397,17 @@ async function handleDeletePlaylistItem(ctx: RouteContext): Promise<Response> {
 async function handleComments(ctx: RouteContext): Promise<Response> {
   const account = requireAccount(ctx);
   const videoId = routeParam(ctx, 0, "videoId");
-  const video = await getVideo(
-    ctx.env.DB,
-    account.id,
-    videoId,
-    videoScope(ctx),
-  );
-  if (!video)
-    throw new HttpError(
-      404,
-      "VIDEO_NOT_FOUND",
-      "Video not found or its metadata expired.",
-    );
+  if (videoScope(ctx) === "fixture") {
+    const video = await getVideo(ctx.env.DB, account.id, videoId, "fixture");
+    if (!video)
+      throw new HttpError(
+        404,
+        "VIDEO_NOT_FOUND",
+        "Video not found or its metadata expired.",
+      );
+  } else if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    throw new HttpError(400, "INVALID_VIDEO_ID", "Identificador de vídeo inválido.");
+  }
 
   if (ctx.env.MODE === "demo" && !ctx.env.YOUTUBE_API_KEY) {
     return json({

@@ -980,6 +980,32 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("loads comments for an unsaved public video without adding it to D1", async () => {
+    const videoId = "unseen00001";
+    const { token } = await insertSession(env.DB, account.id);
+    const pageTokens: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      const url = new URL(input);
+      expect(url.pathname).toBe("/youtube/v3/commentThreads");
+      expect(url.searchParams.get("videoId")).toBe(videoId);
+      pageTokens.push(url.searchParams.get("pageToken"));
+      return Response.json({ items: [], nextPageToken: pageTokens.length === 1 ? "next:page" : undefined });
+    }));
+    try {
+      for (const cursor of [null, "next:page"]) {
+        const url = `${env.APP_ORIGIN}/api/videos/${videoId}/comments${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const response = await worker.fetch(new Request(url, {
+          headers: { cookie: `${SESSION_COOKIE}=${token}` },
+        }), env);
+        expect(response.status).toBe(200);
+        expect((await response.json()) as { items: unknown[] }).toMatchObject({ items: [] });
+      }
+      expect(pageTokens).toEqual([null, "next:page"]);
+      expect(await env.DB.prepare("SELECT id FROM videos WHERE id=?").bind(videoId).first()).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("does not return fabricated public metadata when YouTube rejects the key", async () => {
     env.YOUTUBE_API_KEY = "mock-invalid-key";
     vi.stubGlobal(
