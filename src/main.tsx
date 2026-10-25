@@ -31,12 +31,13 @@ import {
   type PlaylistSummary,
   type SessionInfo,
   type Settings,
-  type SyncRun,
   type Video,
 } from "./api";
 import { Icon, State, useResource, VideoCard } from "./ui";
 import { Player } from "./player";
 import { videoType, type VideoType } from "../shared/video-type";
+import { syncTypeLabels, syncStatusLabel, syncJobPhases, syncJobStatusLabel, isActiveSyncJob, syncJobCounters, syncJobNextAttempt, syncJobNotice, shortText, summarizeSyncDetail, type SyncJob, type SyncSummary } from "./sync-status";
+import { useSyncStatus } from "./use-sync-status";
 import "./styles.css";
 const AppContext = createContext<{
   session: SessionInfo;
@@ -58,293 +59,6 @@ function matchesSearch(query: string, ...values: string[]) {
     value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
   const needle = normalize(query.trim());
   return !needle || values.some((value) => normalize(value).includes(needle));
-}
-const syncTypeLabels: Record<string, string> = {
-  all: "Todo",
-  subscriptions: "Suscripciones",
-  rss: "RSS",
-  playlists: "Listas",
-  metadata: "Metadatos",
-};
-function syncStatusLabel(status?: string) {
-  switch (status) {
-    case "success":
-      return "Correcta";
-    case "partial":
-      return "Parcial";
-    case "error":
-      return "Error";
-    case "running":
-      return "En curso";
-    case "noop":
-      return "Sin cambios";
-    default:
-      return "Desconocida";
-  }
-}
-type SyncJobStatus =
-  "queued" | "running" | "retrying" | "paused" | "success" | "error";
-type SyncJobPhase =
-  | "subscriptions"
-  | "rss"
-  | "playlists"
-  | "playlist_items"
-  | "metadata"
-  | "done";
-interface SyncJob {
-  id: string;
-  type?: string;
-  playlistId?: string;
-  status: SyncJobStatus;
-  phase?: SyncJobPhase | null;
-  items?: number | null;
-  processedChannels?: number | null;
-  processedPlaylists?: number | null;
-  message?: string | null;
-  nextAttemptAt?: string | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-}
-interface SyncSummary {
-  status?: SyncRun["status"];
-  type?: string;
-  message?: string;
-  items?: number;
-  more?: boolean;
-  mode?: "demo" | "real";
-  job?: SyncJob | null;
-}
-interface SyncStatusResponse {
-  runs: SyncRun[];
-  mode?: "demo" | "real";
-  message?: string;
-  jobs?: SyncJob[];
-}
-const syncJobPhases: Record<SyncJobPhase, string> = {
-  subscriptions: "Suscripciones",
-  rss: "RSS",
-  playlists: "Listas",
-  playlist_items: "Elementos de listas",
-  metadata: "Metadatos",
-  done: "Completada",
-};
-function syncJobStatusLabel(status: SyncJobStatus) {
-  switch (status) {
-    case "queued":
-      return "En cola";
-    case "running":
-      return "En curso";
-    case "retrying":
-      return "Reintentando";
-    case "paused":
-      return "En pausa";
-    case "success":
-      return "Correcta";
-    case "error":
-      return "Error";
-  }
-}
-function isActiveSyncJob(job?: SyncJob | null) {
-  return !!job && ["queued", "running", "retrying"].includes(job.status);
-}
-function syncJobCounter(
-  value: number | null | undefined,
-  one: string,
-  many: string,
-) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "";
-  const count = Math.max(0, Math.trunc(value));
-  return `${count} ${count === 1 ? one : many}`;
-}
-function syncJobCounters(job: SyncJob) {
-  return [
-    syncJobCounter(job.items, "elemento", "elementos"),
-    syncJobCounter(job.processedChannels, "canal", "canales"),
-    syncJobCounter(job.processedPlaylists, "lista", "listas"),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-function syncJobNextAttempt(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("es", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-function syncJobNotice(job: SyncJob) {
-  switch (job.status) {
-    case "success":
-      return job.items
-        ? `Sincronización completada · ${job.items} elementos.`
-        : "Sincronización completada.";
-    case "error":
-      return job.message
-        ? `Error de sincronización: ${shortText(job.message)}`
-        : "Error de sincronización. Se conservaron los datos locales.";
-    case "paused":
-      return job.nextAttemptAt
-        ? `Sincronización en pausa · reintento automático ${syncJobNextAttempt(job.nextAttemptAt)}.`
-        : "Sincronización en pausa · reintento automático pendiente.";
-    case "retrying":
-      return "Sincronización con reintento automático en el servidor.";
-    case "running":
-      return "Sincronización en curso en el servidor · puedes cerrar la página.";
-    default:
-      return "Sincronización en cola · continúa en el servidor aunque cierres la página.";
-  }
-}
-function syncCount(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : null;
-}
-function shortText(value: string, max = 160) {
-  const text = value.replace(/\s+/g, " ").trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-function summarizeSyncCounters(value: Record<string, unknown>, scope?: string) {
-  const parts: string[] = [],
-    prefix = scope ? `${scope}: ` : "",
-    label = (count: number, one: string, many: string) =>
-      `${count} ${count === 1 ? one : many}`;
-  const processed = syncCount(value.processed),
-    complete =
-      typeof value.complete === "boolean"
-        ? value.complete
-        : typeof value.listComplete === "boolean"
-          ? value.listComplete
-          : syncCount(value.complete),
-    failed = syncCount(value.failed),
-    pending = syncCount(value.pending),
-    items = syncCount(value.items),
-    skipped = syncCount(value.skipped),
-    pages = syncCount(value.pages ?? value.listPages),
-    imported = syncCount(value.importedPlaylists),
-    pendingPlaylists = syncCount(value.pendingPlaylists),
-    purged = syncCount(value.purged),
-    errors = Array.isArray(value.errors) ? value.errors.length : null,
-    imports = Array.isArray(value.imports) ? value.imports : null;
-  if (processed !== null) {
-    let line = label(processed, "procesado", "procesados");
-    if (complete !== null)
-      line +=
-        typeof complete === "boolean"
-          ? complete
-            ? ", completo"
-            : ", incompleto"
-          : `, ${label(complete, "completo", "completos")}`;
-    if (failed !== null) line += `, ${label(failed, "fallido", "fallidos")}`;
-    if (pending !== null)
-      line += `, ${label(pending, "pendiente", "pendientes")}`;
-    if (items !== null) line += `, ${label(items, "nuevo", "nuevos")}`;
-    if (skipped !== null) line += `, ${label(skipped, "omitido", "omitidos")}`;
-    if (imported !== null)
-      line += `, ${label(imported, "lista importada", "listas importadas")}`;
-    if (pendingPlaylists !== null)
-      line += `, ${label(pendingPlaylists, "lista pendiente", "listas pendientes")}`;
-    parts.push(`${prefix}${line}`);
-  } else {
-    const bits: string[] = [];
-    if (imported !== null)
-      bits.push(label(imported, "importada", "importadas"));
-    if (pendingPlaylists !== null)
-      bits.push(label(pendingPlaylists, "pendiente", "pendientes"));
-    if (pages !== null) bits.push(label(pages, "página", "páginas"));
-    if (complete !== null)
-      bits.push(
-        typeof complete === "boolean"
-          ? complete
-            ? "completo"
-            : "incompleto"
-          : label(complete, "completo", "completos"),
-      );
-    if (items !== null) bits.push(label(items, "nuevo", "nuevos"));
-    if (purged !== null) bits.push(label(purged, "retirado", "retirados"));
-    if (imports)
-      bits.push(
-        `${imports.filter((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).complete === true).length}/${imports.length} listas completas`,
-      );
-    if (bits.length) parts.push(`${prefix}${bits.join(", ")}`);
-  }
-  if (errors !== null && errors > 0)
-    parts.push(`${prefix}${label(errors, "error", "errores")}`);
-  return parts;
-}
-function summarizeSyncDetail(detail: string | null | undefined) {
-  if (!detail) return "";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(detail);
-  } catch {
-    const text = detail.trim();
-    return text.startsWith("{") || text.startsWith("[") ? "" : shortText(text);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
-  const data = parsed as Record<string, unknown>,
-    parts: string[] = [];
-  if (Array.isArray(data.summaries)) {
-    for (const entry of data.summaries.slice(0, 4)) {
-      if (!entry || typeof entry !== "object") continue;
-      const item = entry as Record<string, unknown>,
-        type =
-          typeof item.type === "string"
-            ? syncTypeLabels[item.type] || item.type
-            : "Paso",
-        status =
-          typeof item.status === "string"
-            ? syncStatusLabel(item.status).toLowerCase()
-            : "sin estado",
-        count = syncCount(item.items),
-        nested =
-          typeof item.detail === "string"
-            ? summarizeSyncDetail(item.detail)
-            : "";
-      parts.push(
-        `${type}: ${status}${
-          nested
-            ? ` · ${nested}`
-            : count
-              ? ` · ${count} ${count === 1 ? "elemento" : "elementos"}`
-              : ""
-        }`,
-      );
-    }
-    if (Array.isArray(data.errors) && data.errors.length)
-      parts.push(
-        `${data.errors.length} ${data.errors.length === 1 ? "error" : "errores"}`,
-      );
-    if (
-      data.metadata &&
-      typeof data.metadata === "object" &&
-      !Array.isArray(data.metadata)
-    )
-      parts.push(
-        ...summarizeSyncCounters(
-          data.metadata as Record<string, unknown>,
-          "Metadatos",
-        ),
-      );
-    return shortText(parts.join(" · "), 240);
-  }
-  for (const key of ["rss", "subscriptions", "playlists", "metadata"]) {
-    const nested = data[key];
-    if (nested && typeof nested === "object" && !Array.isArray(nested))
-      parts.push(
-        ...summarizeSyncCounters(
-          nested as Record<string, unknown>,
-          syncTypeLabels[key],
-        ),
-      );
-  }
-  if (parts.length) return shortText(parts.join(" · "), 220);
-  parts.push(...summarizeSyncCounters(data));
-  if (parts.length) return shortText(parts.join(" · "), 220);
-  return typeof data.note === "string" ? shortText(data.note) : "";
 }
 function App() {
   const [session, sessionSet] = useState<SessionInfo | null>(null),
@@ -1130,7 +844,7 @@ function ChannelPage() {
   return <ChannelPageContent key={id} id={id!} />;
 }
 type ChannelVideoPage = {
-  channel?: Pick<Channel, "id" | "title" | "description" | "thumbnailUrl">;
+  channel?: Pick<Channel, "id" | "title" | "description" | "thumbnailUrl" | "subscribed">;
   items: Video[];
   nextCursor: string | null;
 };
@@ -1177,7 +891,7 @@ function ChannelPageContent({ id }: { id: string }) {
       <PageHeading
         title={channel?.title || "Canal"}
         action={<div className="channel-heading-actions">
-          <SubscribeChannel channelId={id} />
+          {data?.channel && <SubscribeChannel channelId={id} subscribed={data.channel.subscribed} />}
           {savedChannel && <button className="button small secondary" aria-expanded={markOpen}
             onClick={() => setMarkOpen((open) => !open)}>
             <Icon name="check" size={16} /> Marcar vídeos
@@ -1217,25 +931,31 @@ function ChannelVideos({ id, data, error, loading }: {
     [busy, setBusy] = useState(false),
     [moreError, setMoreError] = useState(""),
     [updates, setUpdates] = useState<Record<string, Video>>({});
+  const generation = useRef(0);
   useEffect(() => {
+    generation.current++;
     setExtra([]);
     setCursor(data?.nextCursor || null);
     setMoreError("");
-  }, [data]);
+    setUpdates({});
+    setBusy(false);
+  }, [id, data]);
   async function more() {
     if (!cursor || busy) return;
+    const requestGeneration = generation.current;
     setBusy(true);
     setMoreError("");
     try {
       const d = await api<{ items: Video[]; nextCursor: string | null }>(
         `/api/channels/${id}/videos?limit=18&cursor=${encodeURIComponent(cursor)}`,
       );
+      if (requestGeneration !== generation.current) return;
       setExtra((x) => [...x, ...d.items]);
       setCursor(d.nextCursor);
     } catch (e) {
-      setMoreError((e as Error).message);
+      if (requestGeneration === generation.current) setMoreError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (requestGeneration === generation.current) setBusy(false);
     }
   }
   return (
@@ -1260,10 +980,10 @@ function ChannelVideos({ id, data, error, loading }: {
 }
 function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
   const endpoint = id ? `/api/playlists/${id}/sync` : "/api/sync/status";
-  const { data, setData, error, refresh } = useSyncStatus(endpoint);
+  const { notify, session } = useApp();
+  const { data, setData, error, refresh } = useSyncStatus(session.mode === "demo" || session.connected, endpoint);
   const [busy, setBusy] = useState(false),
     [failure, setFailure] = useState("");
-  const { notify } = useApp();
   const activeSeen = useRef(false);
   const job = data?.jobs?.find((j) =>
     id ? j.playlistId === id : j.type === "playlists" && !j.playlistId,
@@ -1596,16 +1316,15 @@ function PlaylistPage() {
     </>
   );
 }
-function SubscribeChannel({ channelId }: { channelId: string }) {
+function SubscribeChannel({ channelId, subscribed: knownSubscribed }: { channelId: string; subscribed?: boolean }) {
   const { session, notify } = useApp();
-  const { data, loading, error } = useResource<{ items: Channel[] }>(
-    "/api/channels",
+  const { data, loading, error } = useResource<{ subscribed: boolean }>(
+    knownSubscribed === undefined ? `/api/subscriptions/${encodeURIComponent(channelId)}` : null,
   );
   const [busy, setBusy] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
-  const following =
-    subscribed || !!data?.items.some((c) => c.id === channelId && c.subscribed);
-  if (loading || following) return null;
+  const following = subscribed || knownSubscribed === true || data?.subscribed === true;
+  if ((knownSubscribed === undefined && loading) || following) return null;
   if (error)
     return (
       <small role="alert" className="error-text">
@@ -2100,72 +1819,10 @@ function Comment({ comment: c }: { comment: CommentItem }) {
     </article>
   );
 }
-const SYNC_STATUS_POLL_MS = 3000;
-function useSyncStatus(endpoint = "/api/sync/status") {
-  const { session } = useApp();
-  const enabled = session.mode === "demo" || session.connected;
-  const [data, setData] = useState<SyncStatusResponse | null>(null);
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  const refresh = useCallback(() => setVersion((value) => value + 1), []);
-  useEffect(() => {
-    if (!enabled) {
-      setData(null);
-      setError("");
-      return;
-    }
-    const controller = new AbortController();
-    api<SyncStatusResponse>(endpoint, "GET", undefined, controller.signal)
-      .then((next) => {
-        if (controller.signal.aborted) return;
-        setData(next);
-        setError("");
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError((e as Error).message);
-      });
-    return () => controller.abort();
-  }, [version, enabled, endpoint]);
-  const active = enabled && !!data?.jobs?.some(isActiveSyncJob);
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false,
-      timer: ReturnType<typeof setTimeout> | undefined;
-    const controller = new AbortController();
-    const schedule = () => {
-      timer = setTimeout(async () => {
-        try {
-          const next = await api<SyncStatusResponse>(
-            endpoint,
-            "GET",
-            undefined,
-            controller.signal,
-          );
-          if (cancelled) return;
-          setData(next);
-          setError("");
-          if (next.jobs?.some(isActiveSyncJob)) schedule();
-        } catch (e) {
-          if (!cancelled && (e as Error).name !== "AbortError") {
-            setError((e as Error).message);
-            schedule();
-          }
-        }
-      }, SYNC_STATUS_POLL_MS);
-    };
-    schedule();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [active, endpoint]);
-  return { data, setData, error, refresh };
-}
 function SettingsPage() {
   const { session, settings, updateSettings, notify, refreshSession } =
     useApp();
-  const { data: syncStatus, error: syncError, refresh: refreshSyncStatus } = useSyncStatus();
+  const { data: syncStatus, error: syncError, refresh: refreshSyncStatus } = useSyncStatus(session.mode === "demo" || session.connected);
   const currentJob =
     syncStatus?.jobs?.find(isActiveSyncJob) || syncStatus?.jobs?.[0];
   const [consent, setConsent] = useState(false);

@@ -124,6 +124,16 @@ afterAll(async () => {
 });
 
 describe("D1 synchronization outcomes with mocked external responses", () => {
+  it("reads one channel subscription without loading the channel catalogue", async () => {
+    const { token } = await insertSession(env.DB, account.id);
+    const read = (id: string) => worker.fetch(new Request(
+      `${env.APP_ORIGIN}/api/subscriptions/${id}`,
+      { headers: { cookie: `${SESSION_COOKIE}=${token}` } },
+    ), env);
+    expect(await (await read("UCold")).json()).toEqual({ subscribed: true });
+    expect(await (await read("UCmissing")).json()).toEqual({ subscribed: false });
+  });
+
   it("marks only older videos from the selected channel for the current user", async () => {
     const selectedId = "UC" + "q".repeat(22);
     const otherId = "UC" + "r".repeat(22);

@@ -63,7 +63,9 @@ test("suscripción desde vídeo respeta permisos y evita repetir la escritura", 
     await route.fulfill({ json: { ...session, mode: "real", connected: true,
       capabilities: { ...session.capabilities, youtubeWrites: writes } } });
   });
-  await page.route("**/api/channels", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route("**/api/subscriptions/*", (route) =>
+    route.fulfill({ json: { subscribed: false } }),
+  );
   await page.route("**/api/subscriptions", (route) => {
     requests++;
     subscribed = true;

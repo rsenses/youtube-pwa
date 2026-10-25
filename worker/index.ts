@@ -7,7 +7,7 @@ import { privateVideoStatements } from "./private-metadata";
 import type { AccountRow, CommentItem, Env, SessionRow, Video } from "./types";
 import { cachedFeed, invalidateReads, feedRevision } from "./read-cache";
 import { deleteFeedThumbnail, deleteWatchedThumbnails, feedThumbnailPath, serveFeedThumbnail, warmKnownFeedThumbnail } from "./feed-thumbnails";
-import { handleWebSub, isWebSubEnabled, WEBSUB_CALLBACK_PATH } from "./websub";
+import { handleWebSub, WEBSUB_CALLBACK_PATH } from "./websub";
 import {
   ExternalError,
   HttpError,
@@ -789,6 +789,13 @@ async function handleChannels(ctx: RouteContext): Promise<Response> {
       ctx.url.searchParams.get("excluded") === "true",
     ),
   });
+}
+
+async function handleSubscriptionStatus(ctx: RouteContext): Promise<Response> {
+  const account = requireAccount(ctx);
+  const channelId = routeParam(ctx, 0, "channelId");
+  const subscription = await getSubscription(ctx.env.DB, account.id, channelId);
+  return json({ subscribed: Boolean(subscription?.active) });
 }
 
 async function handleChannelExclusion(ctx: RouteContext): Promise<Response> {
@@ -1574,6 +1581,11 @@ const ROUTES: Route[] = [
     handler: handleBulkWatch,
   },
   { method: "GET", pattern: /^\/api\/channels$/, handler: handleChannels },
+  {
+    method: "GET",
+    pattern: /^\/api\/subscriptions\/([^/]+)$/,
+    handler: handleSubscriptionStatus,
+  },
   {
     method: "PATCH",
     pattern: /^\/api\/channels\/([^/]+)\/exclusion$/,

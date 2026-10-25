@@ -319,7 +319,6 @@ async function channelRow(
 }
 
 async function handleVerification(
-  request: Request,
   env: Env,
   url: URL,
   channelId: string,
@@ -1123,7 +1122,7 @@ export async function handleWebSub(
   const channelId = queryChannel(url);
   if (!channelId) return textResponse("Invalid channel.", 400);
   if (request.method === "GET")
-    return handleVerification(request, env, url, channelId);
+    return handleVerification(env, url, channelId);
   if (request.method === "POST")
     return handleNotification(request, env, url, channelId);
   return textResponse("Method not allowed.", 405, { allow: "GET, POST" });

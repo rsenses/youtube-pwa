@@ -457,9 +457,6 @@ it("measures catalogue cost: current counts versus remote_item_count and local-o
   // Seed the synthetic remote counts from the current visible counts, outside
   // measurement. Real remote_item_count values come from YouTube and stay
   // nullable when unknown; no value is fabricated by the candidate query.
-  const visibleById = new Map(
-    current43.map((playlist) => [playlist.id, playlist.itemCount]),
-  );
   await db.batch(
     current43.map((playlist) =>
       db
