@@ -440,10 +440,10 @@ export function decodeCursor(value: string | null): FeedCursor | null {
   throw new HttpError(400, "VALIDATION_ERROR", "Invalid cursor.");
 }
 
-/** Opaque upstream page tokens (YouTube) are bounded and character checked. */
+/** YouTube page tokens are opaque; URLSearchParams encodes them upstream. */
 export function assertPageToken(value: string | null): string | null {
   if (!value) return null;
-  if (value.length > 500 || !/^[A-Za-z0-9_=+./-]+$/.test(value)) {
+  if (value.length > 4096 || /[\s\u0000-\u001f\u007f]/u.test(value)) {
     throw new HttpError(400, "VALIDATION_ERROR", "Invalid pagination cursor.");
   }
   return value;

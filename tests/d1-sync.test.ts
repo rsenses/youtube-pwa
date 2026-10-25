@@ -939,6 +939,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     }
   });
   it("supports paginated public comment and reply reads without OAuth", async () => {
+    const opaqueCursor = "next:page?part=comments&token=" + "x".repeat(600);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string, init: RequestInit) => {
@@ -948,7 +949,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         );
         expect(url.searchParams.get("textFormat")).toBe("plainText");
         if (url.pathname.endsWith("/commentThreads")) {
-          expect(url.searchParams.get("pageToken")).toBe("next-thread");
+          expect(url.searchParams.get("pageToken")).toBe(opaqueCursor);
           return Response.json({ items: [], nextPageToken: "thread-page-3" });
         }
         expect(url.searchParams.get("parentId")).toBe("comment-one");
@@ -962,7 +963,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
           await listCommentThreads(
             { apiKey: "mock-key" },
             "M7lc1UVf-VE",
-            "next-thread",
+            opaqueCursor,
           )
         ).nextPageToken,
       ).toBe("thread-page-3");

@@ -158,8 +158,11 @@ describe("query validation", () => {
 
   it("bounds opaque upstream page tokens", () => {
     expect(assertPageToken("abc_DEF-123")).toBe("abc_DEF-123");
+    const opaque = `next:page?part=comments&token=${"x".repeat(600)}`;
+    expect(assertPageToken(opaque)).toBe(opaque);
     expect(assertPageToken(null)).toBeNull();
     expect(() => assertPageToken("bad token!")).toThrow(/pagination cursor/);
+    expect(() => assertPageToken("x".repeat(4097))).toThrow(/pagination cursor/);
   });
 });
 
