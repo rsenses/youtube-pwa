@@ -1,5 +1,5 @@
 // Public YouTube reads and cached related searches; no OAuth writes or scraping.
-import type { Env, Video } from "./types";
+import type { Env, SearchResource, Video } from "./types";
 import { isWebSubEnabled } from "./websub";
 import { isRecentEnough } from "./rss";
 import { relatedQueries } from "./related-query";
@@ -21,6 +21,8 @@ import {
 } from "./db";
 import {
   searchVideos,
+  searchResources,
+  getRemotePlaylist,
   listChannels as youtubeListChannels,
   listPlaylistItems,
   listVideos,
@@ -433,6 +435,81 @@ export async function searchPublicVideos(
     await env.READ_CACHE?.put(key, JSON.stringify(value), { expirationTtl: value.items.length ? 600 : 60 });
   } catch { /* Cache is optional. */ }
   return value;
+}
+
+/** Channel and playlist search results stay transient; they never enter D1. */
+export async function searchPublicResources(
+  env: Env,
+  query: string,
+  type: "channel" | "playlist",
+  pageToken?: string,
+): Promise<{ items: SearchResource[]; nextPageToken: string | null }> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${type}\n${query.toLocaleLowerCase()}\n${pageToken || ""}`));
+  const key = `youtube-search-resource:v1:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  if (env.READ_CACHE) {
+    try {
+      const raw = await env.READ_CACHE.get(key);
+      if (raw) {
+        const cached: unknown = JSON.parse(raw);
+        if (cached && typeof cached === "object" && "items" in cached &&
+            Array.isArray(cached.items) && cached.items.length <= 20 &&
+            cached.items.every((item: unknown) => item && typeof item === "object" &&
+              "id" in item && typeof item.id === "string" &&
+              "title" in item && typeof item.title === "string") &&
+            "nextPageToken" in cached &&
+            (cached.nextPageToken === null || typeof cached.nextPageToken === "string"))
+          return cached as { items: SearchResource[]; nextPageToken: string | null };
+      }
+    } catch { /* Cache is optional. */ }
+  }
+  const response = await searchResources(credential(env), query, type, pageToken);
+  if (!Array.isArray(response.items)) throw new ExternalError("invalid_response");
+  const ids = new Set<string>();
+  const items = response.items.flatMap((entry) => {
+    const id = type === "channel" ? entry.id?.channelId : entry.id?.playlistId;
+    const title = sanitizeText(entry.snippet?.title, 500);
+    if (!id || !title || ids.has(id) ||
+        (type === "channel" ? !CHANNEL_ID.test(id) : !/^[A-Za-z0-9_-]{10,64}$/.test(id) || /^(WL|HL|LL|FL|UU|RD)/.test(id)))
+      return [];
+    ids.add(id);
+    return [{ id, title, description: sanitizeText(entry.snippet?.description, 5000),
+      thumbnailUrl: pickThumbnailUrl(entry.snippet?.thumbnails),
+      channelTitle: sanitizeText(entry.snippet?.channelTitle, 300) }];
+  });
+  const value = { items, nextPageToken: response.nextPageToken ?? null };
+  try { await env.READ_CACHE?.put(key, JSON.stringify(value), { expirationTtl: items.length ? 600 : 60 }); }
+  catch { /* Cache is optional. */ }
+  return value;
+}
+
+/** A public list preview is read directly from YouTube until the user follows it. */
+export async function getPublicPlaylistPage(
+  env: Env,
+  remoteId: string,
+  pageToken?: string,
+): Promise<{ playlist: (SearchResource & { itemCount: number }) | null; items: Video[]; nextPageToken: string | null }> {
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(remoteId) || /^(WL|HL|LL|FL|UU|RD)/.test(remoteId))
+    throw new HttpError(400, "INVALID_PLAYLIST_ID", "Lista de YouTube no válida.");
+  const auth = credential(env);
+  const metadata = pageToken ? null : (await getRemotePlaylist(auth, remoteId)).items?.find((item) => item.id === remoteId);
+  if (!pageToken && !metadata?.snippet?.title)
+    throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Esta lista no está disponible públicamente.");
+  const page = await listPlaylistItems(auth, remoteId, pageToken, 18);
+  if (!Array.isArray(page.items)) throw new ExternalError("invalid_response");
+  const ids = [...new Set(page.items.map((entry) => entry.contentDetails?.videoId || entry.snippet?.resourceId?.videoId)
+    .filter((id): id is string => typeof id === "string" && VIDEO_ID.test(id)))];
+  const details = ids.length ? await listVideos(auth, ids) : { items: [] };
+  if (!Array.isArray(details.items)) throw new ExternalError("invalid_response");
+  const byId = new Map(details.items.map((item) => [item.id, publicPreview(item)]));
+  return {
+    playlist: metadata ? { id: remoteId, title: sanitizeText(metadata.snippet?.title, 500),
+      description: sanitizeText(metadata.snippet?.description, 5000),
+      thumbnailUrl: pickThumbnailUrl(metadata.snippet?.thumbnails),
+      channelTitle: sanitizeText(metadata.snippet?.channelTitle, 300),
+      itemCount: metadata.contentDetails?.itemCount ?? 0 } : null,
+    items: ids.map((id) => byId.get(id)).filter((item): item is Video => item != null),
+    nextPageToken: page.nextPageToken ?? null,
+  };
 }
 
 interface PublicChannelSummary {

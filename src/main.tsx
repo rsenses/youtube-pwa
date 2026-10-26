@@ -29,6 +29,7 @@ import {
   type CommentPage,
   type PlaylistDetail,
   type PlaylistSummary,
+  type SearchResource,
   type SessionInfo,
   type Settings,
   type Video,
@@ -214,6 +215,7 @@ function App() {
                 <Route path="/channels" element={<Channels />} />
                 <Route path="/channels/:id" element={<ChannelPage />} />
                 <Route path="/playlists" element={<Playlists />} />
+                <Route path="/playlists/external/:id" element={<ExternalPlaylistPage />} />
                 <Route path="/playlists/:id" element={<PlaylistPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/watch/:id" element={null} />
@@ -1108,7 +1110,7 @@ function Playlists() {
                 <p>{p.description || "Sin descripción."}</p>
                 <span className="playlist-meta">
                   {p.itemCount} vídeos ·{" "}
-                  {p.source === "local" ? "Local" : "YouTube"}
+                  {p.source === "local" ? "Local" : p.followed ? "Lista ajena" : "YouTube"}
                 </span>
               </div>
               <Icon name="chevron" size={18} />
@@ -1208,9 +1210,9 @@ function PlaylistPage() {
             title={data.title}
             description={
               data.description ||
-              `${data.items.length} vídeos · ${data.source === "local" ? "Lista local" : "Lista de YouTube"}`
+              `${data.items.length} vídeos · ${data.source === "local" ? "Lista local" : data.followed ? "Lista ajena" : "Lista de YouTube"}`
             }
-            action={
+            action={data.followed ? undefined :
               <button
                 className="button secondary"
                 onClick={() => setEdit(!edit)}
@@ -1227,7 +1229,16 @@ function PlaylistPage() {
                 onDone={() => setVersion((v) => v + 1)}
               />
             )}
-          {edit && (
+          {data.followed && <button className="danger-link" onClick={() => setConfirm((value) => !value)}>
+            Dejar de seguir en Álveo
+          </button>}
+          {data.followed && confirm && <div className="bulk-panel">
+            <button className="button danger" onClick={async () => {
+              try { await api(`/api/playlists/${id}`, "DELETE"); navigate("/playlists"); }
+              catch (cause) { notify((cause as Error).message); }
+            }}>Confirmar</button>
+          </div>}
+          {edit && !data.followed && (
             <>
               <PlaylistForm
                 playlist={data}
@@ -1274,7 +1285,7 @@ function PlaylistPage() {
                     ? { ...updated, playlistItemId: item.playlistItemId }
                     : item),
                 }))}
-                extra={
+                extra={data.followed ? undefined :
                   <button
                     className="icon-button"
                     aria-label={removingItem === v.playlistItemId ? "Quitando de la lista…" : "Quitar de la lista"}
@@ -1310,13 +1321,80 @@ function PlaylistPage() {
           </div>
           {!data.items.length && (
             <State>
-              Aún no hay vídeos. Abre uno y elige «Guardar» para añadirlo.
+              {data.followed ? "Aún no hay vídeos importados. Pulsa Actualizar para consultar YouTube." : "Aún no hay vídeos. Abre uno y elige «Guardar» para añadirlo."}
             </State>
           )}
         </>
       )}
     </>
   );
+}
+type ExternalPlaylistPageData = {
+  playlist: (SearchResource & { itemCount: number }) | null;
+  items: Video[];
+  nextPageToken: string | null;
+  localPlaylistId: string | null;
+};
+function ExternalPlaylistPage() {
+  const { id } = useParams();
+  const [params] = useSearchParams();
+  const backQuery = params.get("q") || "";
+  const { session, notify } = useApp();
+  const navigate = useNavigate();
+  const { data, error, loading } = useResource<ExternalPlaylistPageData>(
+    `/api/playlists/external/${id}`,
+  );
+  const [items, setItems] = useState<Video[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [following, setFollowing] = useState(false);
+  const [moreError, setMoreError] = useState("");
+  useEffect(() => {
+    setItems(data?.items || []);
+    setCursor(data?.nextPageToken || null);
+  }, [data]);
+  async function more() {
+    if (!cursor || busy) return;
+    setBusy(true);
+    setMoreError("");
+    try {
+      const page = await api<ExternalPlaylistPageData>(
+        `/api/playlists/external/${id}?pageToken=${encodeURIComponent(cursor)}`,
+      );
+      setItems((before) => [...before, ...page.items.filter((item) => !before.some((old) => old.id === item.id))]);
+      setCursor(page.nextPageToken);
+    } catch (cause) {
+      setMoreError((cause as Error).message);
+    } finally { setBusy(false); }
+  }
+  return <>
+    <Link className="back-link" to={backQuery ? `/search?q=${encodeURIComponent(backQuery)}&type=playlist` : "/search?type=playlist"}>
+      <Icon name="back" size={16} /> Buscar listas
+    </Link>
+    {loading && <State>Cargando lista…</State>}
+    {error && <State error>{error}</State>}
+    {data?.playlist && <>
+      <PageHeading title={data.playlist.title}
+        description={data.playlist.description || `${data.playlist.itemCount} vídeos · ${data.playlist.channelTitle}`}
+        action={data.localPlaylistId ? <Link className="button secondary" to={`/playlists/${data.localPlaylistId}`}>
+          <Icon name="check" size={18} /> En tus listas
+        </Link> : session.mode === "real" && session.connected ? <button className="button" disabled={following}
+          onClick={async () => {
+            setFollowing(true);
+            try {
+              const result = await api<{ id: string }>("/api/playlists/follow", "POST", { remoteId: id });
+              navigate(`/playlists/${result.id}`);
+            } catch (cause) {
+              notify((cause as Error).message);
+              setFollowing(false);
+            }
+          }}><Icon name="plus" size={18} /> {following ? "Siguiendo…" : "Seguir en Álveo"}</button> : undefined} />
+      <p className="playlist-preview-owner">Lista de {data.playlist.channelTitle || "YouTube"} · {data.playlist.itemCount} vídeos</p>
+      <div className="video-grid">{items.map((video) => <SearchVideoCard key={video.id} video={video} />)}</div>
+      {!items.length && <State>Esta lista no tiene vídeos públicos disponibles.</State>}
+      <LoadMore cursor={cursor} busy={busy} error={moreError} onLoad={() => void more()} />
+    </>}
+  </>;
 }
 function SubscribeChannel({ channelId, subscribed: knownSubscribed }: { channelId: string; subscribed?: boolean }) {
   const { session, notify } = useApp();
@@ -1615,8 +1693,9 @@ function Watch({
 function SearchPage() {
   const [params, setParams] = useSearchParams();
   const query = params.get("q") || "";
+  const type = params.get("type") === "channel" ? "channel" : params.get("type") === "playlist" ? "playlist" : "video";
   const [draft, setDraft] = useState(query);
-  const [items, setItems] = useState<Video[]>([]);
+  const [items, setItems] = useState<(Video | SearchResource)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1632,8 +1711,8 @@ function SearchPage() {
     if (query.trim().length < 2) { setBusy(false); return; }
     const controller = new AbortController();
     setBusy(true);
-    api<{ items: Video[]; nextPageToken: string | null }>(
-      `/api/search?q=${encodeURIComponent(query)}`, "GET", undefined, controller.signal,
+    api<{ items: (Video | SearchResource)[]; nextPageToken: string | null }>(
+      `/api/search?q=${encodeURIComponent(query)}${type === "video" ? "" : `&type=${type}`}`, "GET", undefined, controller.signal,
     ).then((result) => {
       if (current === generation.current) {
         setItems(result.items);
@@ -1645,15 +1724,15 @@ function SearchPage() {
       if (current === generation.current) setBusy(false);
     });
     return () => controller.abort();
-  }, [query, version]);
+  }, [query, type, version]);
   async function more() {
     if (!cursor || busy) return;
     const current = generation.current;
     setBusy(true);
     setError("");
     try {
-      const result = await api<{ items: Video[]; nextPageToken: string | null }>(
-        `/api/search?q=${encodeURIComponent(query)}&pageToken=${encodeURIComponent(cursor)}`,
+      const result = await api<{ items: (Video | SearchResource)[]; nextPageToken: string | null }>(
+        `/api/search?q=${encodeURIComponent(query)}${type === "video" ? "" : `&type=${type}`}&pageToken=${encodeURIComponent(cursor)}`,
       );
       if (current !== generation.current) return;
       setItems((before) => [...before, ...result.items.filter((item) => !before.some((old) => old.id === item.id))]);
@@ -1665,26 +1744,48 @@ function SearchPage() {
     }
   }
   return <>
-    <PageHeading title="Buscar vídeos" description="Busca en YouTube y guarda lo que te interese en una lista." />
+    <PageHeading title="Buscar" description="Encuentra vídeos, canales y listas de YouTube." />
     <form className="global-search" role="search" onSubmit={(event) => {
       event.preventDefault();
       const next = draft.trim().replace(/\s+/g, " ");
-      if (next.length >= 2 && next.length <= 120) setParams({ q: next });
+      if (next.length >= 2 && next.length <= 120) setParams(type === "video" ? { q: next } : { q: next, type });
     }}>
       <Icon name="search" size={20} />
-      <input autoFocus aria-label="Buscar vídeos en YouTube" placeholder="Busca vídeos en YouTube" value={draft}
+      <input autoFocus aria-label="Buscar en YouTube" placeholder="Buscar en YouTube" value={draft}
         maxLength={120} onChange={(event) => setDraft(event.target.value)} />
       <button className="button small" disabled={draft.trim().length < 2 || busy}>Buscar</button>
     </form>
+    <div className="segmented search-tabs" aria-label="Tipo de resultado">
+      {([ ["video", "Vídeos"], ["channel", "Canales"], ["playlist", "Listas"] ] as const).map(([value, label]) =>
+        <button key={value} className={type === value ? "active" : ""} aria-pressed={type === value}
+          onClick={() => setParams(value === "video" ? { q: query } : { q: query, type: value })}>{label}</button>)}
+    </div>
     {!query && <State>Escribe lo que buscas y pulsa Buscar.</State>}
     {error && !cursor && <State error>{error} <button onClick={() => setVersion((n) => n + 1)}>Reintentar</button></State>}
-    <div className="video-grid">
-      {items.map((video) => <SearchVideoCard key={video.id} video={video} />)}
+    <div className={type === "video" ? "video-grid" : "search-resource-grid"}>
+      {items.map((item) => type === "video"
+        ? <SearchVideoCard key={item.id} video={item as Video} />
+        : <SearchResourceCard key={item.id} resource={item as SearchResource} type={type} query={query} />)}
     </div>
-    {busy && !items.length && <State>Buscando vídeos…</State>}
-    {query && !busy && !error && !items.length && <State>No encontramos vídeos para «{query}».</State>}
+    {busy && !items.length && <State>Buscando…</State>}
+    {query && !busy && !error && !items.length && <State>No encontramos {type === "video" ? "vídeos" : type === "channel" ? "canales" : "listas"} para «{query}».</State>}
     <LoadMore cursor={cursor} busy={busy} error={error} onLoad={() => void more()} />
   </>;
+}
+function SearchResourceCard({ resource, type, query }: { resource: SearchResource; type: "channel" | "playlist"; query: string }) {
+  const destination = type === "channel" ? `/channels/${resource.id}` : `/playlists/external/${resource.id}?q=${encodeURIComponent(query)}`;
+  return <Link className={`search-resource-card ${type}`} to={destination}>
+    <span className="search-resource-art">
+      {resource.thumbnailUrl ? <img src={resource.thumbnailUrl} alt="" loading="lazy" /> :
+        <Icon name={type === "channel" ? "channels" : "lists"} size={24} />}
+    </span>
+    <span className="search-resource-copy">
+      <strong>{resource.title}</strong>
+      <small>{type === "channel" ? "Canal" : `Lista · ${resource.channelTitle || "YouTube"}`}</small>
+      {resource.description && <span>{resource.description}</span>}
+    </span>
+    <Icon name="chevron" size={18} />
+  </Link>;
 }
 function SearchVideoCard({ video }: { video: Video }) {
   const [save, setSave] = useState(false);
@@ -1704,7 +1805,7 @@ function SaveVideo({ id, onDone }: { id: string; onDone: () => void }) {
       <h3>Guardar en una lista</h3>
       {loading && <span>Cargando…</span>}
       {error && <State error>{error}</State>}
-      {data?.items.map((p) => (
+      {data?.items.filter((p) => !p.followed).map((p) => (
         <button
           key={p.id}
           disabled={busy}
@@ -1729,7 +1830,7 @@ function SaveVideo({ id, onDone }: { id: string; onDone: () => void }) {
           <Icon name="plus" size={17} />
         </button>
       ))}
-      {!loading && !data?.items.length && (
+      {!loading && !data?.items.some((p) => !p.followed) && (
         <Link to="/playlists">Crear lista</Link>
       )}
     </div>

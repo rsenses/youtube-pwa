@@ -68,6 +68,7 @@ beforeAll(async () => {
     "0013_exclusions.sql",
     "0015_short_retention.sql",
     "0016_pure_black_theme.sql",
+    "0017_followed_playlists.sql",
   ]) {
     const sql = await readFile(
       new URL(`../migrations/${name}`, import.meta.url),
@@ -125,6 +126,93 @@ afterAll(async () => {
 });
 
 describe("D1 synchronization outcomes with mocked external responses", () => {
+  it("searches channels and playlists and previews a list without persisting search results", async () => {
+    const channelId = "UC" + "z".repeat(22);
+    const playlistId = "PLforeign123456";
+    const calls: string[] = [];
+    env.YOUTUBE_API_KEY = "fixture-public-key";
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      const url = new URL(input);
+      calls.push(`${url.pathname}:${url.searchParams.get("type") || url.searchParams.get("id") || ""}`);
+      if (url.pathname.endsWith("/search")) return Response.json({ items: [{
+        id: url.searchParams.get("type") === "channel" ? { channelId } : { playlistId },
+        snippet: { title: "Resultado", description: "Descripción", channelTitle: "Autor" },
+      }] });
+      if (url.pathname.endsWith("/playlists")) return Response.json({ items: [{
+        id: playlistId, snippet: { title: "Lista ajena", channelTitle: "Autor" },
+        contentDetails: { itemCount: 1 },
+      }] });
+      if (url.pathname.endsWith("/playlistItems")) return Response.json({ items: [{
+        id: "item-one", contentDetails: { videoId: "foreign0001" },
+      }] });
+      if (url.pathname.endsWith("/videos")) return Response.json({ items: [{
+        id: "foreign0001", status: { privacyStatus: "public", embeddable: true },
+        snippet: { title: "Vídeo de la lista", channelId, channelTitle: "Autor",
+          publishedAt: "2026-10-01T00:00:00Z", liveBroadcastContent: "none" },
+        contentDetails: { duration: "PT5M" },
+      }] });
+      throw new Error(`Unexpected endpoint ${url.pathname}`);
+    }));
+    try {
+      const { token } = await insertSession(env.DB, account.id);
+      const read = (path: string) => worker.fetch(new Request(env.APP_ORIGIN + path, {
+        headers: { cookie: `${SESSION_COOKIE}=${token}` },
+      }), env);
+      const channels = await read("/api/search?q=author&type=channel");
+      expect((await channels.json() as { items: Array<{ id: string }> }).items[0].id).toBe(channelId);
+      const lists = await read("/api/search?q=author&type=playlist");
+      expect((await lists.json() as { items: Array<{ id: string }> }).items[0].id).toBe(playlistId);
+      const preview = await read(`/api/playlists/external/${playlistId}`);
+      expect(await preview.json()).toMatchObject({ playlist: { title: "Lista ajena" },
+        localPlaylistId: null, items: [{ id: "foreign0001" }] });
+      expect(await env.DB.prepare("SELECT id FROM playlists WHERE account_id=? AND remote_id=?")
+        .bind(account.id, playlistId).first()).toBeNull();
+      expect(calls.filter((call) => call.includes("/search:"))).toHaveLength(2);
+    } finally { env.YOUTUBE_API_KEY = undefined; vi.unstubAllGlobals(); }
+  });
+
+  it("follows a searched playlist locally without writing to YouTube", async () => {
+    const remoteId = "PLforeign123456";
+    const requests: string[] = [];
+    env.SYNC_QUEUE = { send: async () => {} } as unknown as Env["SYNC_QUEUE"];
+    vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+      const url = new URL(input);
+      requests.push(`${init?.method || "GET"} ${url.pathname}`);
+      if (url.pathname.endsWith("/playlists")) return Response.json({ items: [{
+        id: remoteId, snippet: { title: "Lista ajena", channelId: "UCother" },
+        contentDetails: { itemCount: 2 },
+      }] });
+      throw new Error("Unexpected external request");
+    }));
+    try {
+      const { token, session } = await insertSession(env.DB, account.id);
+      const headers = { cookie: `${SESSION_COOKIE}=${token}`, origin: env.APP_ORIGIN,
+        "content-type": "application/json", "x-csrf-token": session.csrf_token };
+      const follow = () => worker.fetch(new Request(env.APP_ORIGIN + "/api/playlists/follow", {
+        method: "POST", headers, body: JSON.stringify({ remoteId }),
+      }), env);
+      const response = await follow();
+      expect(response.status).toBe(201);
+      const { id } = await response.json() as { id: string };
+      expect(await env.DB.prepare("SELECT followed,remote_id FROM playlists WHERE id=?")
+        .bind(id).first()).toMatchObject({ followed: 1, remote_id: remoteId });
+      expect(await (await follow()).json()).toMatchObject({ id, alreadyAdded: true });
+      const edit = await worker.fetch(new Request(`${env.APP_ORIGIN}/api/playlists/${id}`, {
+        method: "PATCH", headers, body: JSON.stringify({ title: "Changed" }),
+      }), env);
+      expect(edit.status).toBe(403);
+      const remove = await worker.fetch(new Request(`${env.APP_ORIGIN}/api/playlists/${id}`, {
+        method: "DELETE", headers,
+      }), env);
+      expect(remove.status).toBe(200);
+      expect(await env.DB.prepare("SELECT id FROM playlists WHERE id=?").bind(id).first()).toBeNull();
+      expect(requests).toEqual(["GET /youtube/v3/playlists"]);
+    } finally {
+      await env.DB.prepare("DELETE FROM sync_jobs WHERE account_id=?").bind(account.id).run();
+      env.SYNC_QUEUE = undefined;
+      vi.unstubAllGlobals();
+    }
+  });
   it("reads one channel subscription without loading the channel catalogue", async () => {
     const { token } = await insertSession(env.DB, account.id);
     const read = (id: string) => worker.fetch(new Request(

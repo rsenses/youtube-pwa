@@ -835,6 +835,7 @@ interface PlaylistRow extends Record<string, unknown> {
   privacy_status: string | null;
   item_count: number;
   excluded: number;
+  followed: number;
 }
 
 function mapPlaylistSummary(row: PlaylistRow): PlaylistSummary {
@@ -843,6 +844,7 @@ function mapPlaylistSummary(row: PlaylistRow): PlaylistSummary {
     title: String(row.title ?? ""),
     description: String(row.description ?? ""),
     source: row.source === "youtube" ? "youtube" : "local",
+    followed: toNumber(row.followed) === 1,
     itemCount: toNumber(row.item_count),
     excluded: toNumber(row.excluded) === 1,
   };
@@ -856,7 +858,7 @@ export async function listPlaylists(
 ): Promise<PlaylistSummary[]> {
   const result = await db
     .prepare(
-      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded,
+      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded, p.followed,
               CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
                 (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
                  WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
@@ -881,7 +883,7 @@ export async function getPlaylistRow(
 ): Promise<PlaylistRow | null> {
   const row = await db
     .prepare(
-      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded,
+      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded, p.followed,
               CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
                 (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
                  WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
@@ -972,6 +974,7 @@ export interface NewPlaylist {
   privacyStatus?: string | null;
   remoteItemCount?: number | null;
   seeded?: boolean;
+  followed?: boolean;
 }
 
 export async function createPlaylist(
@@ -984,8 +987,8 @@ export async function createPlaylist(
     .prepare(
       `INSERT INTO playlists
          (id, account_id, source, remote_id, title, description, privacy_status, remote_item_count,
-          fetched_at, items_synced_at, seeded, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+          fetched_at, items_synced_at, seeded, followed, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -998,6 +1001,7 @@ export async function createPlaylist(
       input.remoteItemCount ?? null,
       now,
       input.seeded ? 1 : 0,
+      input.followed ? 1 : 0,
       now,
       now,
     )
@@ -1073,10 +1077,11 @@ export async function getPlaylistItem(
   id: string;
   remote_item_id: string | null;
   source: "local" | "youtube";
+  followed: number;
 } | null> {
   const row = await db
     .prepare(
-      `SELECT pi.id AS id, pi.remote_item_id AS remote_item_id, p.source AS source
+      `SELECT pi.id AS id, pi.remote_item_id AS remote_item_id, p.source AS source, p.followed AS followed
        FROM playlist_items pi
        JOIN playlists p ON p.id = pi.playlist_id
        WHERE pi.id = ? AND pi.playlist_id = ? AND p.account_id = ?`,
@@ -1086,6 +1091,7 @@ export async function getPlaylistItem(
       id: string;
       remote_item_id: string | null;
       source: "local" | "youtube";
+      followed: number;
     }>();
   return row ?? null;
 }

@@ -33,6 +33,7 @@ beforeAll(async () => {
     "0008_incremental_sync",
     "0012_playlist_unimported",
     "0013_exclusions",
+    "0017_followed_playlists",
   ]) {
     const sql = (
       await readFile(

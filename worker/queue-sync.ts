@@ -478,7 +478,7 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
    SELECT ?,?,'youtube',?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM accounts WHERE id=? AND connected=1) AND (?='' OR EXISTS(SELECT 1 FROM playlists target WHERE target.id=? AND target.account_id=?)) ON CONFLICT(account_id,remote_id) DO UPDATE SET
    title=excluded.title,description=excluded.description,privacy_status=excluded.privacy_status,
    remote_item_count=excluded.remote_item_count,fetched_at=excluded.fetched_at,
-   updated_at=excluded.updated_at WHERE playlists.updated_at<=?`,
+   updated_at=excluded.updated_at WHERE (playlists.followed=0 OR playlists.id=?) AND playlists.updated_at<=?`,
       ).bind(
         s.playlistId || crypto.randomUUID(),
         account.id,
@@ -496,6 +496,7 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
         s.playlistId || "",
         s.playlistId || "",
         account.id,
+        s.playlistId || "",
         s.startedAt,
       ),
     );
@@ -507,7 +508,7 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
     // than the snapshot start are preserved; local lists are never reconciled here.
     if (!s.playlistId)
       await env.DB.prepare(
-        "DELETE FROM playlists WHERE account_id=? AND source='youtube' AND fetched_at<? AND updated_at<?",
+        "DELETE FROM playlists WHERE account_id=? AND source='youtube' AND followed=0 AND fetched_at<? AND updated_at<?",
       )
         .bind(account.id, s.startedAt, s.startedAt)
         .run();
@@ -566,7 +567,7 @@ async function playlistItemsStep(env: Env, account: AccountRow, s: State) {
           .first<{ id: string; remote_id: string }>()
       : await env.DB.prepare(
           `SELECT id,remote_id FROM playlists
-           WHERE account_id=? AND id>? AND excluded=0 AND source='youtube' AND items_synced_at IS NULL
+           WHERE account_id=? AND id>? AND excluded=0 AND source='youtube' AND followed=0 AND items_synced_at IS NULL
            ORDER BY id LIMIT 1`,
         )
           .bind(account.id, s.playlistCursor || "")

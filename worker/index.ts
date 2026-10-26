@@ -87,6 +87,7 @@ import {
   deletePlaylistItem as youtubeDeletePlaylistItem,
   deleteSubscription as youtubeDeleteSubscription,
   insertPlaylist as youtubeInsertPlaylist,
+  getRemotePlaylist,
   insertPlaylistItem as youtubeInsertPlaylistItem,
   insertSubscription as youtubeInsertSubscription,
   listChannels as youtubeListChannels,
@@ -117,6 +118,8 @@ import {
   getPublicVideo,
   getPublicSuggestions,
   searchPublicVideos,
+  searchPublicResources,
+  getPublicPlaylistPage,
   storeVideos,
 } from "./public-youtube";
 import {
@@ -1083,6 +1086,50 @@ async function handleCreatePlaylist(ctx: RouteContext): Promise<Response> {
   return json({ id, source: "local" }, 201);
 }
 
+async function handleFollowPlaylist(ctx: RouteContext): Promise<Response> {
+  const account = requireAccount(ctx);
+  requireConnectedAccount(account);
+  if (!ctx.env.SYNC_QUEUE)
+    throw new HttpError(501, "QUEUE_REQUIRED", "Esta función necesita la cola de sincronización.");
+  const body = await readJsonObject(ctx.request);
+  const remoteId = requiredString(body, "remoteId", { max: 64 });
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(remoteId) || /^(WL|HL|LL|FL|UU|RD)/.test(remoteId))
+    throw new HttpError(400, "INVALID_PLAYLIST_ID", "Lista de YouTube no válida.");
+  const existing = await ctx.env.DB.prepare(
+    "SELECT id FROM playlists WHERE account_id=? AND remote_id=?",
+  ).bind(account.id, remoteId).first<{ id: string }>();
+  if (existing) return json({ id: existing.id, alreadyAdded: true });
+  const remote = (await getRemotePlaylist(await getValidAccessToken(ctx.env, account.id), remoteId))
+    .items?.find((item) => item.id === remoteId);
+  if (!remote?.snippet?.title)
+    throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Esta lista no está disponible.");
+  if (remote.snippet.channelId === account.youtube_channel_id)
+    throw new HttpError(409, "OWN_PLAYLIST", "Esta lista es tuya. Actualiza el catálogo para importarla.");
+  let id: string;
+  try {
+    id = await createPlaylist(ctx.env.DB, {
+      accountId: account.id,
+      source: "youtube",
+      remoteId,
+      title: sanitizeText(remote.snippet.title, 500),
+      description: sanitizeText(remote.snippet.description, 5000),
+      privacyStatus: remote.status?.privacyStatus ?? null,
+      remoteItemCount: remote.contentDetails?.itemCount ?? null,
+      followed: true,
+    });
+  } catch (error) {
+    if (String(error).includes("UNIQUE constraint failed")) {
+      const row = await ctx.env.DB.prepare("SELECT id FROM playlists WHERE account_id=? AND remote_id=?")
+        .bind(account.id, remoteId).first<{ id: string }>();
+      if (row) return json({ id: row.id, alreadyAdded: true });
+    }
+    throw error;
+  }
+  try { await startQueuedSync(ctx.env, account, "playlists", true, id); }
+  catch (error) { if (!(error instanceof HttpError && error.code === "SYNC_BUSY")) throw error; }
+  return json({ id, followed: true }, 201);
+}
+
 async function ownedRemotePlaylist(ctx: RouteContext) {
   const account = requireAccount(ctx);
   const id = routeParam(ctx, 0, "playlistId");
@@ -1152,6 +1199,8 @@ async function handleUpdatePlaylist(ctx: RouteContext): Promise<Response> {
   );
   if (!row)
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Playlist not found.");
+  if (row.followed)
+    throw new HttpError(403, "READ_ONLY_PLAYLIST", "Las listas ajenas son de solo lectura.");
   const body = await readJsonObject(ctx.request);
   const titleProvided = "title" in body;
   const descriptionProvided = "description" in body;
@@ -1215,6 +1264,11 @@ async function handleDeletePlaylist(ctx: RouteContext): Promise<Response> {
   if (!row)
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Playlist not found.");
 
+  if (row.followed) {
+    await deletePlaylistRow(ctx.env.DB, playlistId);
+    return json({ deleted: true, id: playlistId, remote: false });
+  }
+
   if (row.source === "youtube") {
     if (!row.remote_id) {
       throw new HttpError(
@@ -1258,6 +1312,8 @@ async function handleAddPlaylistItem(ctx: RouteContext): Promise<Response> {
   );
   if (!row)
     throw new HttpError(404, "PLAYLIST_NOT_FOUND", "Playlist not found.");
+  if (row.followed)
+    throw new HttpError(403, "READ_ONLY_PLAYLIST", "No puedes editar una lista ajena.");
   const body = await readJsonObject(ctx.request);
   const videoId = assertId(
     requiredString(body, "videoId", { max: 64 }),
@@ -1361,6 +1417,8 @@ async function handleDeletePlaylistItem(ctx: RouteContext): Promise<Response> {
       "PLAYLIST_ITEM_NOT_FOUND",
       "Playlist item not found.",
     );
+  if (item.followed)
+    throw new HttpError(403, "READ_ONLY_PLAYLIST", "No puedes editar una lista ajena.");
 
   if (item.source === "youtube") {
     if (!item.remote_item_id) {
@@ -1538,7 +1596,10 @@ const ROUTES: Route[] = [
       if (query.length < 2 || query.length > 120)
         throw new HttpError(400, "INVALID_QUERY", "Escribe entre 2 y 120 caracteres.");
       const pageToken = assertPageToken(ctx.url.searchParams.get("pageToken"));
-      return json(await searchPublicVideos(ctx.env, query, pageToken || undefined));
+      const type = parseEnum(ctx.url.searchParams.get("type") || "video", ["video", "channel", "playlist"] as const, "type");
+      return json(type === "video"
+        ? await searchPublicVideos(ctx.env, query, pageToken || undefined)
+        : await searchPublicResources(ctx.env, query, type, pageToken || undefined));
     },
   },
   { method: "GET", pattern: /^\/api\/feed$/, handler: handleFeed },
@@ -1625,6 +1686,26 @@ const ROUTES: Route[] = [
     method: "POST",
     pattern: /^\/api\/playlists$/,
     handler: handleCreatePlaylist,
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/playlists\/follow$/,
+    handler: handleFollowPlaylist,
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/playlists\/external\/([^/]+)$/,
+    handler: async (ctx) => {
+      const account = requireAccount(ctx);
+      const remoteId = routeParam(ctx, 0, "remoteId");
+      const pageToken = assertPageToken(ctx.url.searchParams.get("pageToken"));
+      const [page, row] = await Promise.all([
+        getPublicPlaylistPage(ctx.env, remoteId, pageToken || undefined),
+        ctx.env.DB.prepare("SELECT id FROM playlists WHERE account_id=? AND remote_id=?")
+          .bind(account.id, remoteId).first<{ id: string }>(),
+      ]);
+      return json({ ...page, localPlaylistId: row?.id ?? null });
+    },
   },
   {
     method: "POST",

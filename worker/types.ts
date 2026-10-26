@@ -69,12 +69,21 @@ export interface PlaylistSummary {
   title: string;
   description: string;
   source: "local" | "youtube";
+  followed?: boolean;
   itemCount: number;
   excluded?: boolean;
 }
 
 export interface PlaylistDetail extends PlaylistSummary {
   items: Video[];
+}
+
+export interface SearchResource {
+  id: string;
+  title: string;
+  description: string;
+  thumbnailUrl: string;
+  channelTitle: string;
 }
 
 export interface Settings {

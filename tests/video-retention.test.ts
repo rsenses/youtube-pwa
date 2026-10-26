@@ -28,6 +28,7 @@ const ALL_MIGRATIONS = [
   "0013_exclusions.sql",
   "0014_exclusion_websub.sql",
   "0015_short_retention.sql",
+  "0017_followed_playlists.sql",
 ];
 
 function splitSql(sql: string): string[] {

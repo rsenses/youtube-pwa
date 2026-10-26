@@ -561,6 +561,52 @@ label > textarea {
 .global-search input:focus-visible { outline: none; }
 .search-result { min-width: 0; }
 .search-result .save-panel { margin-top: 8px; }
+.search-tabs { width: fit-content; max-width: 100%; margin: 0 0 20px; }
+.search-resource-grid { display: grid; gap: 12px; }
+.search-resource-card {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+    color: var(--text);
+    transition: border-color .16s ease, transform .16s ease;
+}
+.search-resource-card:hover { border-color: var(--green); transform: translateY(-2px); }
+.search-resource-art {
+    display: grid;
+    place-items: center;
+    flex: 0 0 156px;
+    width: 156px;
+    height: 88px;
+    overflow: hidden;
+    border-radius: 10px;
+    background: var(--green-soft);
+    color: var(--green);
+}
+.search-resource-card.channel .search-resource-art {
+    flex-basis: 88px;
+    width: 88px;
+    border-radius: 50%;
+}
+.search-resource-art img { width: 100%; height: 100%; object-fit: cover; }
+.search-resource-copy { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.search-resource-copy strong { font-size: 16px; overflow-wrap: anywhere; }
+.search-resource-copy small { color: var(--muted); font-size: 13px; }
+.search-resource-copy > span {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+.search-resource-card > svg { flex-shrink: 0; color: var(--muted); }
+.playlist-preview-owner { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
 .video-options-result { min-width: 0; }
 .video-options-result:has(.video-card-menu-items) { position: relative; z-index: 2; }
 .video-options-result .save-panel { margin-top: 8px; }
@@ -2033,6 +2079,10 @@ label > textarea {
     .search-input {
         max-width: none;
     }
+    .search-resource-card { gap: 12px; padding: 12px; }
+    .search-resource-art { flex-basis: 112px; width: 112px; height: 72px; }
+    .search-resource-card.channel .search-resource-art { flex-basis: 72px; width: 72px; }
+    .search-resource-copy strong { font-size: 14px; }
     .channels-grid,
     .playlist-grid,
     .settings-grid {

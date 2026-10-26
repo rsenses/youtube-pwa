@@ -90,6 +90,7 @@ beforeEach(async () => {
     "0012_playlist_unimported.sql",
     "0013_exclusions.sql",
     "0015_short_retention.sql",
+    "0017_followed_playlists.sql",
     // Exercise compatibility before optional watermark backfill migration 0008.
   ]) {
     const sql = (
@@ -858,6 +859,39 @@ describe("durable queue synchronization", () => {
         "SELECT count(*) AS n FROM playlist_items WHERE video_id='oldnew00001'",
       ).first<{ n: number }>())!.n,
     ).toBe(1);
+  });
+  it("preserves followed lists in catalogue sync and imports their items only on manual update", async () => {
+    const remoteId = "PLforeign123456";
+    await env.DB.prepare(
+      `INSERT INTO playlists(id,account_id,source,remote_id,title,followed,created_at,updated_at)
+       VALUES ('followed-manual',?,'youtube',?,'Foreign',1,?,?)`,
+    ).bind(account.id, remoteId, old, old).run();
+    await startQueuedSync(env, account, "playlists", true);
+    await drain();
+    expect(await env.DB.prepare("SELECT title,followed FROM playlists WHERE id='followed-manual'")
+      .first()).toMatchObject({ title: "Foreign", followed: 1 });
+    expect(await env.DB.prepare("SELECT id FROM playlist_items WHERE playlist_id='followed-manual'")
+      .first()).toBeNull();
+
+    const original = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit) => {
+      const url = new URL(input);
+      if (url.pathname.endsWith("/playlists") && url.searchParams.get("id") === remoteId)
+        return Response.json({ items: [{ id: remoteId, snippet: { title: "Updated foreign" }, contentDetails: { itemCount: 1 } }] });
+      if (url.pathname.endsWith("/playlistItems") && url.searchParams.get("playlistId") === remoteId)
+        return Response.json({ items: [{ id: "foreign-item-1", snippet: {
+          title: "Foreign clip", position: 0, publishedAt: "2026-10-01T00:00:00Z",
+          resourceId: { videoId: "foreign0001" }, videoOwnerChannelId: channels[0],
+        }, contentDetails: { videoId: "foreign0001" } }] });
+      return original(input, init);
+    }));
+    await startQueuedSync(env, account, "playlists", true, "followed-manual");
+    await drain();
+    expect((await queuedSyncStatus(env, account.id))[0].status).toBe("success");
+    expect(await env.DB.prepare("SELECT title,followed FROM playlists WHERE id='followed-manual'")
+      .first()).toMatchObject({ title: "Updated foreign", followed: 1 });
+    expect((await getPlaylistItems(env.DB, account.id, "followed-manual", "external"))
+      .map((item) => item.id)).toEqual(["foreign0001"]);
   });
   it("does not renew old metadata during general sync and keeps the explicit playlist path", async () => {
     const selected = await importLibrary();

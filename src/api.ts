@@ -5,6 +5,7 @@ export type {
   Channel,
   PlaylistSummary,
   PlaylistDetail,
+  SearchResource,
   Settings,
   SessionInfo,
   CommentPage,

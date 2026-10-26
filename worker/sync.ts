@@ -975,7 +975,7 @@ function playlistSummaryStatement(
        remote_item_count = excluded.remote_item_count,
        fetched_at = excluded.fetched_at,
        updated_at = excluded.updated_at
-     WHERE playlists.updated_at <= excluded.updated_at`,
+     WHERE playlists.followed=0 AND playlists.updated_at <= excluded.updated_at`,
   ).bind(
     crypto.randomUUID(),
     accountId,
@@ -1189,7 +1189,7 @@ async function syncPlaylists(
 
   if (listComplete) {
     await env.DB.prepare(
-      `DELETE FROM playlists WHERE account_id = ? AND source = 'youtube'
+      `DELETE FROM playlists WHERE account_id = ? AND source = 'youtube' AND followed=0
       AND fetched_at < ? AND updated_at < ?`,
     )
       .bind(account.id, now, now)
@@ -1198,7 +1198,7 @@ async function syncPlaylists(
 
   const candidatesResult = await env.DB.prepare(
     `SELECT id, remote_id AS remoteId FROM playlists
-     WHERE account_id = ? AND source = 'youtube' AND remote_id IS NOT NULL
+     WHERE account_id = ? AND source = 'youtube' AND followed=0 AND remote_id IS NOT NULL
        AND items_synced_at IS NULL
      ORDER BY COALESCE(items_synced_at, '') ASC, id ASC
      LIMIT ?`,
@@ -1242,7 +1242,7 @@ async function syncPlaylists(
 
   const pendingRow = await env.DB.prepare(
     `SELECT COUNT(*) AS pending FROM playlists
-    WHERE account_id = ? AND source = 'youtube' AND remote_id IS NOT NULL
+    WHERE account_id = ? AND source = 'youtube' AND followed=0 AND remote_id IS NOT NULL
       AND items_synced_at IS NULL`,
   )
     .bind(account.id)

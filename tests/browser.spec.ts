@@ -41,7 +41,7 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
   await page.goto("/feed");
   await page.getByRole("link", { name: "Buscar" }).click();
   expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
-  const input = page.getByRole("textbox", { name: "Buscar vídeos en YouTube" });
+  const input = page.getByRole("textbox", { name: "Buscar en YouTube" });
   await expect(input).toBeFocused();
   await input.fill("old film");
   await page.getByRole("button", { name: "Buscar", exact: true }).click();
@@ -51,6 +51,47 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
   await page.getByRole("button", { name: /Favoritos/ }).click();
   expect(saved).toEqual(["search00001"]);
   expect(searched).toEqual(["old film", "old film"]);
+});
+
+test("busca canales y listas, abre una lista ajena y permite seguirla", async ({ page }) => {
+  const channelId = "UC" + "z".repeat(22);
+  const playlistId = "PLforeign123456";
+  await page.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    const session = await response.json();
+    await route.fulfill({ json: { ...session, mode: "real", connected: true } });
+  });
+  await page.route("**/api/search?*", (route) => {
+    const type = new URL(route.request().url()).searchParams.get("type");
+    return route.fulfill({ json: { items: type === "channel" ? [{ id: channelId,
+      title: "Canal de prueba", description: "Canal oficial", thumbnailUrl: "", channelTitle: "" }] :
+      type === "playlist" ? [{ id: playlistId, title: "Lista de prueba", description: "Vídeos elegidos",
+        thumbnailUrl: "", channelTitle: "Autor" }] : [], nextPageToken: null } });
+  });
+  await page.route(`**/api/playlists/external/${playlistId}`, (route) => route.fulfill({ json: {
+    playlist: { id: playlistId, title: "Lista de prueba", description: "Vídeos elegidos",
+      itemCount: 0, channelTitle: "Autor", thumbnailUrl: "" },
+    items: [], nextPageToken: null, localPlaylistId: null,
+  } }));
+  await page.route("**/api/playlists/follow", (route) => route.fulfill({ json: { id: "local-list" }, status: 201 }));
+  await page.route("**/api/playlists/local-list", (route) => route.fulfill({ json: {
+    id: "local-list", title: "Lista de prueba", description: "", source: "youtube", followed: true,
+    itemCount: 0, items: [],
+  } }));
+  await page.route("**/api/playlists/local-list/sync", (route) => route.fulfill({ json: { jobs: [], runs: [] } }));
+  await page.goto("/search");
+  await page.getByRole("textbox", { name: "Buscar en YouTube" }).fill("autor");
+  await page.getByRole("button", { name: "Buscar", exact: true }).click();
+  await page.getByRole("button", { name: "Canales", exact: true }).click();
+  await page.getByRole("link", { name: /Canal de prueba/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/channels/${channelId}$`));
+  await page.goBack();
+  await page.getByRole("button", { name: "Listas", exact: true }).click();
+  await page.getByRole("link", { name: /Lista de prueba/ }).click();
+  await expect(page.getByRole("heading", { name: "Lista de prueba" })).toBeVisible();
+  await page.getByRole("button", { name: "Seguir en Álveo" }).click();
+  await expect(page).toHaveURL(/\/playlists\/local-list$/);
+  await expect(page.getByRole("button", { name: "Dejar de seguir en Álveo" })).toBeVisible();
 });
 
 test("suscripción desde vídeo respeta permisos y evita repetir la escritura", async ({ page }) => {

@@ -281,8 +281,24 @@ async function requestJson(
 }
 
 export interface YouTubeSearchList {
-  items?: Array<{ id?: { videoId?: string } }>;
+  items?: Array<{ id?: { videoId?: string; channelId?: string; playlistId?: string }; snippet?: YouTubeSnippet }>;
   nextPageToken?: string;
+}
+
+export async function searchResources(
+  credential: ReadCredential,
+  query: string,
+  type: "channel" | "playlist",
+  pageToken?: string,
+): Promise<YouTubeSearchList> {
+  return (await requestJson(credential, "GET", "search", {
+    part: "snippet",
+    type,
+    q: query,
+    maxResults: 20,
+    pageToken,
+    order: "relevance",
+  })) as unknown as YouTubeSearchList;
 }
 
 /** Public search, never personalized recommendations or arbitrary URLs. */
@@ -425,7 +441,7 @@ export async function listPlaylists(
 }
 
 export async function getRemotePlaylist(
-  accessToken: string,
+  accessToken: ReadCredential,
   id: string,
 ): Promise<YouTubePlaylistList> {
   return (await requestJson(accessToken, "GET", "playlists", {

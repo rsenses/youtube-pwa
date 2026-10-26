@@ -162,7 +162,9 @@ function cachedPlaylistSummary(value: unknown): PlaylistSummary | null {
   if (itemCount === undefined || itemCount === null || itemCount < 0) {
     return null;
   }
-  return { id, title, description, source, itemCount };
+  return { id, title, description, source, itemCount,
+    ...(typeof value.followed === "boolean" ? { followed: value.followed } : {}),
+  };
 }
 
 function cachedPlaylistSummaries(value: unknown): PlaylistSummary[] | null {
