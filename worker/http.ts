@@ -143,6 +143,22 @@ export function sanitizeText(value: unknown, maxLength: number): string {
     : cleaned;
 }
 
+/** YouTube sometimes HTML-encodes text fields in its JSON responses. */
+export function sanitizeHtmlText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  const named: Record<string, string> = {
+    amp: "&", apos: "'", gt: ">", lt: "<", nbsp: "\u00a0", quot: '"', "39": "'",
+  };
+  const decoded = value.replace(/&(?:#(?:x([\da-f]{1,6})|(\d{1,7}))|([a-z]+|39));/gi,
+    (entity, hex: string | undefined, decimal: string | undefined, name: string | undefined) => {
+      if (name) return named[name.toLowerCase()] ?? entity;
+      const code = Number.parseInt(hex || decimal || "", hex ? 16 : 10);
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+        ? String.fromCodePoint(code) : entity;
+    });
+  return sanitizeText(decoded, maxLength);
+}
+
 export function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }

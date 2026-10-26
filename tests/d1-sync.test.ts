@@ -136,10 +136,10 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       calls.push(`${url.pathname}:${url.searchParams.get("type") || url.searchParams.get("id") || ""}`);
       if (url.pathname.endsWith("/search")) return Response.json({ items: [{
         id: url.searchParams.get("type") === "channel" ? { channelId } : { playlistId },
-        snippet: { title: "Resultado", description: "Descripción", channelTitle: "Autor" },
+        snippet: { title: "Let&#39;s &amp; go", description: "Vídeos &quot;favoritos&quot;", channelTitle: "Autor &amp; amigos" },
       }] });
       if (url.pathname.endsWith("/playlists")) return Response.json({ items: [{
-        id: playlistId, snippet: { title: "Lista ajena", channelTitle: "Autor" },
+        id: playlistId, snippet: { title: "Let&39;s &amp; go", channelTitle: "Autor &amp; amigos" },
         contentDetails: { itemCount: 1 },
       }] });
       if (url.pathname.endsWith("/playlistItems")) return Response.json({ items: [{
@@ -161,9 +161,11 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const channels = await read("/api/search?q=author&type=channel");
       expect((await channels.json() as { items: Array<{ id: string }> }).items[0].id).toBe(channelId);
       const lists = await read("/api/search?q=author&type=playlist");
-      expect((await lists.json() as { items: Array<{ id: string }> }).items[0].id).toBe(playlistId);
+      expect((await lists.json() as { items: Array<{ id: string; title: string; description: string; channelTitle: string }> }).items[0]).toMatchObject({
+        id: playlistId, title: "Let's & go", description: 'Vídeos "favoritos"', channelTitle: "Autor & amigos",
+      });
       const preview = await read(`/api/playlists/external/${playlistId}`);
-      expect(await preview.json()).toMatchObject({ playlist: { title: "Lista ajena" },
+      expect(await preview.json()).toMatchObject({ playlist: { title: "Let's & go", channelTitle: "Autor & amigos" },
         localPlaylistId: null, items: [{ id: "foreign0001" }] });
       expect(await env.DB.prepare("SELECT id FROM playlists WHERE account_id=? AND remote_id=?")
         .bind(account.id, playlistId).first()).toBeNull();
@@ -179,7 +181,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const url = new URL(input);
       requests.push(`${init?.method || "GET"} ${url.pathname}`);
       if (url.pathname.endsWith("/playlists")) return Response.json({ items: [{
-        id: remoteId, snippet: { title: "Lista ajena", channelId: "UCother" },
+        id: remoteId, snippet: { title: "Let&#39;s &amp; go", description: "Vídeos &quot;favoritos&quot;", channelId: "UCother" },
         contentDetails: { itemCount: 2 },
       }] });
       throw new Error("Unexpected external request");
@@ -194,8 +196,9 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const response = await follow();
       expect(response.status).toBe(201);
       const { id } = await response.json() as { id: string };
-      expect(await env.DB.prepare("SELECT followed,remote_id FROM playlists WHERE id=?")
-        .bind(id).first()).toMatchObject({ followed: 1, remote_id: remoteId });
+      expect(await env.DB.prepare("SELECT followed,remote_id,title,description FROM playlists WHERE id=?")
+        .bind(id).first()).toMatchObject({ followed: 1, remote_id: remoteId,
+          title: "Let's & go", description: 'Vídeos "favoritos"' });
       expect(await (await follow()).json()).toMatchObject({ id, alreadyAdded: true });
       const edit = await worker.fetch(new Request(`${env.APP_ORIGIN}/api/playlists/${id}`, {
         method: "PATCH", headers, body: JSON.stringify({ title: "Changed" }),

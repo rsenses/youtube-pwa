@@ -9,6 +9,7 @@ import {
   HttpError,
   isoInDays,
   nowIso,
+  sanitizeHtmlText,
   sanitizeText,
 } from "./http";
 import {
@@ -445,7 +446,7 @@ export async function searchPublicResources(
   pageToken?: string,
 ): Promise<{ items: SearchResource[]; nextPageToken: string | null }> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${type}\n${query.toLocaleLowerCase()}\n${pageToken || ""}`));
-  const key = `youtube-search-resource:v1:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  const key = `youtube-search-resource:v2:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   if (env.READ_CACHE) {
     try {
       const raw = await env.READ_CACHE.get(key);
@@ -467,14 +468,14 @@ export async function searchPublicResources(
   const ids = new Set<string>();
   const items = response.items.flatMap((entry) => {
     const id = type === "channel" ? entry.id?.channelId : entry.id?.playlistId;
-    const title = sanitizeText(entry.snippet?.title, 500);
+    const title = sanitizeHtmlText(entry.snippet?.title, 500);
     if (!id || !title || ids.has(id) ||
         (type === "channel" ? !CHANNEL_ID.test(id) : !/^[A-Za-z0-9_-]{10,64}$/.test(id) || /^(WL|HL|LL|FL|UU|RD)/.test(id)))
       return [];
     ids.add(id);
-    return [{ id, title, description: sanitizeText(entry.snippet?.description, 5000),
+    return [{ id, title, description: sanitizeHtmlText(entry.snippet?.description, 5000),
       thumbnailUrl: pickThumbnailUrl(entry.snippet?.thumbnails),
-      channelTitle: sanitizeText(entry.snippet?.channelTitle, 300) }];
+      channelTitle: sanitizeHtmlText(entry.snippet?.channelTitle, 300) }];
   });
   const value = { items, nextPageToken: response.nextPageToken ?? null };
   try { await env.READ_CACHE?.put(key, JSON.stringify(value), { expirationTtl: items.length ? 600 : 60 }); }
@@ -502,10 +503,10 @@ export async function getPublicPlaylistPage(
   if (!Array.isArray(details.items)) throw new ExternalError("invalid_response");
   const byId = new Map(details.items.map((item) => [item.id, publicPreview(item)]));
   return {
-    playlist: metadata ? { id: remoteId, title: sanitizeText(metadata.snippet?.title, 500),
-      description: sanitizeText(metadata.snippet?.description, 5000),
+    playlist: metadata ? { id: remoteId, title: sanitizeHtmlText(metadata.snippet?.title, 500),
+      description: sanitizeHtmlText(metadata.snippet?.description, 5000),
       thumbnailUrl: pickThumbnailUrl(metadata.snippet?.thumbnails),
-      channelTitle: sanitizeText(metadata.snippet?.channelTitle, 300),
+      channelTitle: sanitizeHtmlText(metadata.snippet?.channelTitle, 300),
       itemCount: metadata.contentDetails?.itemCount ?? 0 } : null,
     items: ids.map((id) => byId.get(id)).filter((item): item is Video => item != null),
     nextPageToken: page.nextPageToken ?? null,

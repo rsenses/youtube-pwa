@@ -32,6 +32,7 @@ import {
   requiredString,
   requireCsrf,
   requireMutationOrigin,
+  sanitizeHtmlText,
   sanitizeText,
 } from "./http";
 import {
@@ -1111,8 +1112,8 @@ async function handleFollowPlaylist(ctx: RouteContext): Promise<Response> {
       accountId: account.id,
       source: "youtube",
       remoteId,
-      title: sanitizeText(remote.snippet.title, 500),
-      description: sanitizeText(remote.snippet.description, 5000),
+      title: sanitizeHtmlText(remote.snippet.title, 500),
+      description: sanitizeHtmlText(remote.snippet.description, 5000),
       privacyStatus: remote.status?.privacyStatus ?? null,
       remoteItemCount: remote.contentDetails?.itemCount ?? null,
       followed: true,
