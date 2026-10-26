@@ -110,6 +110,60 @@ test("actualiza solo la lista seleccionada y no ofrece sincronización externa p
   ).toHaveCount(0);
 });
 
+test("una lista seguida explica la importación y muestra los vídeos al terminar", async ({ page }) => {
+  await page.route(/\/api\/session$/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), mode: "real", connected: true } });
+  });
+  let detailReads = 0;
+  const video = { id: "foreign0001", title: "Vídeo importado", channelId: "UC" + "a".repeat(22),
+    channelTitle: "Autor", thumbnailUrl: "", description: "", publishedAt: "2026-10-01T00:00:00Z",
+    durationSeconds: 300, watched: false, positionSeconds: 0, percent: 0, manual: false,
+    isLive: false, liveBroadcastContent: "none", playlistItemId: "item-one" };
+  await page.route(/\/api\/playlists\/followed-list$/, (route) => {
+    detailReads++;
+    return route.fulfill({ json: { id: "followed-list", title: "Lista ajena", description: "",
+      source: "youtube", followed: true, itemCount: 1,
+      itemsSyncedAt: detailReads > 1 ? now : null,
+      items: detailReads > 1 ? [video] : [] } });
+  });
+  let statusReads = 0;
+  await page.route(/\/api\/playlists\/followed-list\/sync$/, (route) => {
+    statusReads++;
+    return route.fulfill({ json: { runs: [], jobs: [queuedJob({ type: "playlists",
+      playlistId: "followed-list", phase: "playlist_items",
+      status: statusReads > 1 ? "success" : "running", items: statusReads > 1 ? 1 : 0 })] } });
+  });
+  await page.goto("/playlists/followed-list");
+  await expect(page.getByRole("button", { name: "Importando…" })).toBeDisabled();
+  await expect(page.getByText(/Importando vídeos de YouTube/)).toBeVisible();
+  await expect(page.getByText(/Pulsa Actualizar para consultar YouTube/)).toHaveCount(0);
+  await expect(page.getByText("Vídeo importado")).toBeVisible({ timeout: 8000 });
+  expect(detailReads).toBeGreaterThan(1);
+});
+
+test("una importación terminada antes de abrir la lista refresca el resultado vacío", async ({ page }) => {
+  await page.route(/\/api\/session$/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), mode: "real", connected: true } });
+  });
+  let detailReads = 0;
+  await page.route(/\/api\/playlists\/fast-list$/, (route) => {
+    detailReads++;
+    return route.fulfill({ json: { id: "fast-list", title: "Lista vacía", description: "",
+      source: "youtube", followed: true, itemCount: 0,
+      itemsSyncedAt: detailReads > 1 ? now : null, items: [] } });
+  });
+  await page.route(/\/api\/playlists\/fast-list\/sync$/, (route) =>
+    route.fulfill({ json: { runs: [], jobs: [queuedJob({
+      type: "playlists", playlistId: "fast-list", status: "success", phase: "done",
+    })] } }),
+  );
+  await page.goto("/playlists/fast-list");
+  await expect(page.getByText("Esta lista no tiene vídeos disponibles.")).toBeVisible();
+  expect(detailReads).toBe(2);
+});
+
 const legacyRun = {
   id: "legacy-run-1",
   type: "all",

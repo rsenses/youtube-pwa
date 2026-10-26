@@ -836,6 +836,7 @@ interface PlaylistRow extends Record<string, unknown> {
   item_count: number;
   excluded: number;
   followed: number;
+  items_synced_at: string | null;
 }
 
 function mapPlaylistSummary(row: PlaylistRow): PlaylistSummary {
@@ -883,7 +884,7 @@ export async function getPlaylistRow(
 ): Promise<PlaylistRow | null> {
   const row = await db
     .prepare(
-      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded, p.followed,
+      `SELECT p.id, p.title, p.description, p.source, p.remote_id, p.privacy_status, p.excluded, p.followed, p.items_synced_at,
               CASE WHEN p.source='youtube' AND p.remote_item_count IS NOT NULL THEN p.remote_item_count ELSE
                 (SELECT COUNT(*) FROM playlist_items pi JOIN videos v ON v.id=pi.video_id
                  WHERE pi.playlist_id=p.id AND (v.purged_at IS NULL OR EXISTS(
@@ -933,6 +934,7 @@ export async function getPlaylistDetail(
   if (!row) return null;
   return {
     ...mapPlaylistSummary(row),
+    itemsSyncedAt: row.items_synced_at,
     items: await getPlaylistItems(db, accountId, playlistId, scope),
   };
 }

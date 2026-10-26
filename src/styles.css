@@ -1390,6 +1390,10 @@ label > textarea {
 .playlist-detail-sync {
     margin-bottom: 20px;
 }
+.playlist-detail-sync > .state {
+    flex-basis: 100%;
+    margin: 4px 0 0;
+}
 .sync-history {
     display: flex;
     flex-direction: column;

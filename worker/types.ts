@@ -76,6 +76,7 @@ export interface PlaylistSummary {
 
 export interface PlaylistDetail extends PlaylistSummary {
   items: Video[];
+  itemsSyncedAt?: string | null;
 }
 
 export interface SearchResource {

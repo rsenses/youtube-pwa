@@ -982,24 +982,31 @@ function ChannelVideos({ id, data, error, loading }: {
     </>
   );
 }
-function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
+function RemoteListSync({ id, onDone, showEmpty = false, initialImport = false }: {
+  id?: string;
+  onDone: () => void;
+  showEmpty?: boolean;
+  initialImport?: boolean;
+}) {
   const endpoint = id ? `/api/playlists/${id}/sync` : "/api/sync/status";
   const { notify, session } = useApp();
   const { data, setData, error, refresh } = useSyncStatus(session.mode === "demo" || session.connected, endpoint);
   const [busy, setBusy] = useState(false),
     [failure, setFailure] = useState("");
   const activeSeen = useRef(false);
+  const completedJob = useRef<string | null>(null);
   const job = data?.jobs?.find((j) =>
     id ? j.playlistId === id : j.type === "playlists" && !j.playlistId,
   );
   const active = !!job && isActiveSyncJob(job);
   useEffect(() => {
     if (active) activeSeen.current = true;
-    else if (job?.status === "success" && activeSeen.current) {
+    else if (job?.status === "success" && (activeSeen.current || initialImport) && completedJob.current !== job.id) {
       activeSeen.current = false;
+      completedJob.current = job.id;
       onDone();
     }
-  }, [active, job?.status, onDone]);
+  }, [active, job?.id, job?.status, initialImport, onDone]);
   return (
     <div className={`settings-buttons${id ? " playlist-detail-sync" : ""}`} data-testid="remote-list-sync">
       <button
@@ -1019,11 +1026,7 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
               setData({ runs: [], jobs: [next.job] });
             }
             refresh();
-            notify(
-              id
-                ? "Actualización de esta lista en cola."
-                : "Actualización del catálogo en cola.",
-            );
+            if (!id) notify("Actualización del catálogo en cola.");
           } catch (e) {
             setFailure((e as Error).message);
           } finally {
@@ -1032,8 +1035,18 @@ function RemoteListSync({ id, onDone }: { id?: string; onDone: () => void }) {
         }}
       >
         <Icon name="sync" size={18} />
-        Actualizar
+        {active ? (initialImport ? "Importando…" : "Actualizando…") : "Actualizar"}
       </button>
+      {id && active && !showEmpty && <small role="status">Actualizando en segundo plano…</small>}
+      {showEmpty && <State>
+        {!data && !error ? "Comprobando la importación…"
+          : active ? `Importando vídeos de YouTube…${job?.items ? ` ${job.items} procesados.` : ""} Aparecerán aquí al terminar; puedes salir de esta página.`
+          : job?.status === "paused" ? `Importación en pausa. Se reintentará automáticamente${job.nextAttemptAt ? ` el ${syncJobNextAttempt(job.nextAttemptAt)}` : ""}.`
+          : job?.status === "error" ? "No se pudieron importar los vídeos. Pulsa Actualizar para reintentar."
+          : initialImport && job?.status === "success" ? "Terminando la importación…"
+          : initialImport ? "Esta lista está pendiente de importar. Pulsa Actualizar para empezar."
+          : "Esta lista no tiene vídeos disponibles."}
+      </State>}
       {job?.status === "error" && (
         <small role="alert">Error al actualizar{job.message ? `: ${job.message}` : ""}</small>
       )}
@@ -1227,6 +1240,8 @@ function PlaylistPage() {
               <RemoteListSync
                 id={id!}
                 onDone={() => setVersion((v) => v + 1)}
+                showEmpty={!!data.followed && data.items.length === 0}
+                initialImport={!!data.followed && data.itemsSyncedAt == null}
               />
             )}
           {data.followed && <button className="danger-link" onClick={() => setConfirm((value) => !value)}>
@@ -1319,9 +1334,9 @@ function PlaylistPage() {
               />
             ))}
           </div>
-          {!data.items.length && (
+          {!data.items.length && !data.followed && (
             <State>
-              {data.followed ? "Aún no hay vídeos importados. Pulsa Actualizar para consultar YouTube." : "Aún no hay vídeos. Abre uno y elige «Guardar» para añadirlo."}
+              Aún no hay vídeos. Abre uno y elige «Guardar» para añadirlo.
             </State>
           )}
         </>
