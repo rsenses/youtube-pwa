@@ -296,11 +296,15 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: string) => {
       const url = new URL(input);
       calls.push(url.pathname);
-      if (url.pathname.endsWith("/channels")) return Response.json({ items: [{
-        id: channelId,
-        snippet: { title: "Archive", description: "Public archive" },
-        contentDetails: { relatedPlaylists: { uploads: "UUarchive" } },
-      }] });
+      if (url.pathname.endsWith("/channels")) {
+        expect(url.searchParams.get("part")).toContain("statistics");
+        return Response.json({ items: [{
+          id: channelId,
+          snippet: { title: "Archive", description: "Public archive" },
+          contentDetails: { relatedPlaylists: { uploads: "UUarchive" } },
+          statistics: { subscriberCount: "1234000", hiddenSubscriberCount: false },
+        }] });
+      }
       if (url.pathname.endsWith("/playlistItems")) {
         expect(url.searchParams.get("maxResults")).toBe("18");
         const batch = url.searchParams.has("pageToken") ? ids.slice(18) : ids.slice(0, 18);
@@ -318,7 +322,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     }));
     try {
       const first = await listPublicChannelVideos(env, account.id, channelId);
-      expect(first.channel).toMatchObject({ id: channelId, title: "Archive", description: "Public archive" });
+      expect(first.channel).toMatchObject({ id: channelId, title: "Archive", description: "Public archive", subscriberCount: 1234000 });
       expect(first.items).toHaveLength(18);
       expect(first.items[0]).toMatchObject({ watched: true, transient: false });
       expect(first.items[1]).toMatchObject({ watched: false, transient: true });
@@ -355,6 +359,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
         id: channelId,
         snippet: { title: "Unsaved channel", description: "From YouTube" },
         contentDetails: { relatedPlaylists: { uploads: "UUunsaved" } },
+        statistics: { subscriberCount: "42", hiddenSubscriberCount: true },
       }] });
       if (url.pathname.endsWith("/playlistItems")) return Response.json({
         items: [{ contentDetails: { videoId } }],
@@ -376,7 +381,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       const first = await worker.fetch(request(), env);
       expect(first.status).toBe(200);
       expect(await first.json()).toMatchObject({
-        channel: { id: channelId, title: "Unsaved channel", description: "From YouTube" },
+        channel: { id: channelId, title: "Unsaved channel", description: "From YouTube", subscriberCount: null },
         items: [{ id: videoId, transient: true }],
       });
       expect(await env.DB.prepare("SELECT id FROM channels WHERE id=?").bind(channelId).first()).toBeNull();

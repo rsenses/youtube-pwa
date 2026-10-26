@@ -518,6 +518,7 @@ interface PublicChannelSummary {
   title: string;
   description: string;
   thumbnailUrl: string;
+  subscriberCount: number | null;
 }
 
 interface PublicChannelProfile extends PublicChannelSummary {
@@ -534,7 +535,9 @@ function isChannelSummary(value: unknown, channelId: string): value is PublicCha
   if (!value || typeof value !== "object") return false;
   const profile = value as Partial<PublicChannelSummary>;
   return profile.id === channelId && typeof profile.title === "string" &&
-    typeof profile.description === "string" && typeof profile.thumbnailUrl === "string";
+    typeof profile.description === "string" && typeof profile.thumbnailUrl === "string" &&
+    (profile.subscriberCount === null ||
+      (typeof profile.subscriberCount === "number" && Number.isSafeInteger(profile.subscriberCount) && profile.subscriberCount >= 0));
 }
 
 function isChannelProfile(value: unknown, channelId: string): value is PublicChannelProfile {
@@ -543,7 +546,7 @@ function isChannelProfile(value: unknown, channelId: string): value is PublicCha
 }
 
 async function publicChannelProfile(env: Env, channelId: string): Promise<PublicChannelProfile> {
-  const key = `youtube-channel-profile:v1:${channelId}`;
+  const key = `youtube-channel-profile:v2:${channelId}`;
   try {
     const raw = await env.READ_CACHE?.get(key);
     if (raw) {
@@ -556,11 +559,14 @@ async function publicChannelProfile(env: Env, channelId: string): Promise<Public
   const item = result.items.find((entry) => entry.id === channelId);
   const uploads = item?.contentDetails?.relatedPlaylists?.uploads;
   if (!uploads) throw new HttpError(404, "CHANNEL_NOT_FOUND", "Canal no disponible en YouTube.");
+  const count = item?.statistics?.subscriberCount;
   const profile: PublicChannelProfile = {
     id: channelId,
     title: sanitizeText(item?.snippet?.title, 300) || channelId,
     description: sanitizeText(item?.snippet?.description, 5000),
     thumbnailUrl: pickThumbnailUrl(item?.snippet?.thumbnails),
+    subscriberCount: !item?.statistics?.hiddenSubscriberCount && typeof count === "string" && /^\d+$/.test(count) && Number.isSafeInteger(Number(count))
+      ? Number(count) : null,
     uploads,
   };
   try { await env.READ_CACHE?.put(key, JSON.stringify(profile), { expirationTtl: 86400 }); }
@@ -578,7 +584,7 @@ export async function listPublicChannelVideos(
 ): Promise<PublicChannelPage> {
   if (!CHANNEL_ID.test(channelId))
     throw new HttpError(400, "INVALID_CHANNEL_ID", "Identificador de canal inválido.");
-  const pageKey = `youtube-channel-page:v2:${channelId}:${limit}:${pageToken || "first"}`;
+  const pageKey = `youtube-channel-page:v3:${channelId}:${limit}:${pageToken || "first"}`;
   let page: PublicChannelPage | null = null;
   try {
     const raw = await env.READ_CACHE?.get(pageKey);

@@ -94,6 +94,21 @@ test("busca canales y listas, abre una lista ajena y permite seguirla", async ({
   await expect(page.getByRole("button", { name: "Dejar de seguir" })).toBeVisible();
 });
 
+test("muestra los suscriptores públicos en la ficha del canal", async ({ page }) => {
+  const channelId = "UC" + "n".repeat(22);
+  await page.route(`**/api/channels/${channelId}/videos?*`, (route) => route.fulfill({ json: {
+    channel: { id: channelId, title: "Canal público", description: "Descripción del canal",
+      thumbnailUrl: "", subscriberCount: 1234000 },
+    items: [], nextCursor: null,
+  } }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/channels/${channelId}`);
+  await expect(page.getByRole("heading", { name: "Canal público" })).toBeVisible();
+  await expect(page.getByText("1.234.000 suscriptores")).toBeVisible();
+  await expect(page.getByText("Descripción del canal")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+
 test("suscripción desde vídeo respeta permisos y evita repetir la escritura", async ({ page }) => {
   let writes = false;
   let subscribed = false;

@@ -60,6 +60,7 @@ export interface Channel {
   thumbnailUrl: string;
   description: string;
   subscribed: boolean;
+  subscriberCount?: number | null;
   lastSyncedAt: string | null;
   excluded?: boolean;
 }

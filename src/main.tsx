@@ -284,7 +284,7 @@ function PageHeading({
   action,
 }: {
   title: string;
-  description?: string;
+  description?: ReactNode;
   action?: ReactNode;
 }) {
   return (
@@ -848,7 +848,7 @@ function ChannelPage() {
   return <ChannelPageContent key={id} id={id!} />;
 }
 type ChannelVideoPage = {
-  channel?: Pick<Channel, "id" | "title" | "description" | "thumbnailUrl" | "subscribed">;
+  channel?: Pick<Channel, "id" | "title" | "description" | "thumbnailUrl" | "subscribed" | "subscriberCount">;
   items: Video[];
   nextCursor: string | null;
 };
@@ -901,12 +901,14 @@ function ChannelPageContent({ id }: { id: string }) {
             <Icon name="check" size={16} /> Marcar vídeos
           </button>}
         </div>}
-        description={
-          channel?.description ||
-          (session.capabilities.publicData
+        description={<>
+          {channel?.subscriberCount != null && <span className="channel-subscribers">
+            {new Intl.NumberFormat("es-ES").format(channel.subscriberCount)} suscriptores
+          </span>}
+          {channel?.description || (session.capabilities.publicData
             ? "Vídeos públicos de este canal en YouTube."
-            : "Vídeos de este canal guardados en la biblioteca.")
-        }
+            : "Vídeos de este canal guardados en la biblioteca.")}
+        </>}
       />
       {markOpen && <div className="bulk-panel channel-mark-panel">
         <button className="button small secondary" disabled={marking}

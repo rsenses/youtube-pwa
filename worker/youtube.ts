@@ -398,6 +398,7 @@ export interface YouTubeChannelItem {
   id?: string;
   snippet?: YouTubeSnippet;
   contentDetails?: { relatedPlaylists?: { uploads?: string } };
+  statistics?: { subscriberCount?: string; hiddenSubscriberCount?: boolean };
 }
 
 export interface YouTubeChannelList {
@@ -409,7 +410,7 @@ export async function listChannels(
   options: { mine?: boolean; id?: string; includeUploads?: boolean },
 ): Promise<YouTubeChannelList> {
   return (await requestJson(accessToken, "GET", "channels", {
-    part: options.includeUploads ? "snippet,contentDetails" : "snippet",
+    part: options.includeUploads ? "snippet,contentDetails,statistics" : "snippet",
     mine: options.mine ? "true" : undefined,
     id: options.id,
   })) as unknown as YouTubeChannelList;
