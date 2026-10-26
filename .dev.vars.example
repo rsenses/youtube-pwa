@@ -1,0 +1,12 @@
+# Copia MANUALMENTE a .dev.vars (ignorado por Git), sin sobrescribir valores existentes.
+# Opcional: activa metadatos, comentarios y vídeos públicos reales sin OAuth.
+YOUTUBE_API_KEY=""
+# Las siguientes variables solo son necesarias para conectar tu cuenta con OAuth.
+# No compartas sus valores ni los pongas en variables VITE_*.
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+# Genera 32 bytes aleatorios en base64. Conservar esta clave para descifrar tokens.
+TOKEN_ENCRYPTION_KEY=""
+# WebSub solo para un despliegue HTTPS con callback accesible desde el hub.
+# En producción: usar npx wrangler secret put WEBSUB_SECRET, no este archivo.
+# WEBSUB_SECRET=""

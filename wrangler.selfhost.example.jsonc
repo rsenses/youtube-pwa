@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mi-alveo",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "routes": [{ "pattern": "alveo.ejemplo.com", "custom_domain": true }],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*", "/auth/*"]
+  },
+  "vars": {
+    "MODE": "real",
+    "APP_ORIGIN": "https://alveo.ejemplo.com",
+    "SYNC_PROFILE": "free",
+    "SYNC_QUEUE_DAILY_CAP": "2600",
+    "WEBSUB_ENABLED": "false"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "mi-alveo-db",
+    "database_id": "REEMPLAZAR_UUID_D1",
+    "migrations_dir": "migrations"
+  }],
+  "kv_namespaces": [{ "binding": "READ_CACHE", "id": "REEMPLAZAR_ID_KV" }],
+  "r2_buckets": [{ "binding": "FEED_IMAGES", "bucket_name": "mi-alveo-images" }],
+  "queues": {
+    "producers": [{ "binding": "SYNC_QUEUE", "queue": "mi-alveo-sync" }],
+    "consumers": [{
+      "queue": "mi-alveo-sync",
+      "max_batch_size": 1,
+      "max_batch_timeout": 0,
+      "max_concurrency": 1,
+      "max_retries": 5
+    }]
+  },
+  "triggers": { "crons": ["* * * * *"] }
+}

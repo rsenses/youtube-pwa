@@ -20,7 +20,7 @@
     "preview:real": "wrangler dev --local --ip 127.0.0.1 --port 5173 -c wrangler.real-local.jsonc",
     "db:migrate": "wrangler d1 migrations apply DB --local -c wrangler.local.jsonc",
     "db:seed": "wrangler d1 execute DB --local -c wrangler.local.jsonc --file fixtures/seed.sql",
-    "setup": "wrangler d1 migrations apply alveo --remote --config wrangler.jsonc",
+    "setup": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
     "setup:local": "npm run db:migrate && npm run db:seed",
     "build": "tsc --noEmit && vite build",
     "postbuild": "node scripts/check-build.mjs",
