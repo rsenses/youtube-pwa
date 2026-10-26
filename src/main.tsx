@@ -1230,7 +1230,7 @@ function PlaylistPage() {
               />
             )}
           {data.followed && <button className="danger-link" onClick={() => setConfirm((value) => !value)}>
-            Dejar de seguir en Álveo
+            Dejar de seguir
           </button>}
           {data.followed && confirm && <div className="bulk-panel">
             <button className="button danger" onClick={async () => {
@@ -1388,7 +1388,7 @@ function ExternalPlaylistPage() {
               notify((cause as Error).message);
               setFollowing(false);
             }
-          }}><Icon name="plus" size={18} /> {following ? "Siguiendo…" : "Seguir en Álveo"}</button> : undefined} />
+          }}><Icon name="plus" size={18} /> {following ? "Siguiendo…" : "Seguir"}</button> : undefined} />
       <p className="playlist-preview-owner">Lista de {data.playlist.channelTitle || "YouTube"} · {data.playlist.itemCount} vídeos</p>
       <div className="video-grid">{items.map((video) => <SearchVideoCard key={video.id} video={video} />)}</div>
       {!items.length && <State>Esta lista no tiene vídeos públicos disponibles.</State>}

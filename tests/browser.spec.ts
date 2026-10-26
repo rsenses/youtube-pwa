@@ -89,9 +89,9 @@ test("busca canales y listas, abre una lista ajena y permite seguirla", async ({
   await page.getByRole("button", { name: "Listas", exact: true }).click();
   await page.getByRole("link", { name: /Lista de prueba/ }).click();
   await expect(page.getByRole("heading", { name: "Lista de prueba" })).toBeVisible();
-  await page.getByRole("button", { name: "Seguir en Álveo" }).click();
+  await page.getByRole("button", { name: "Seguir", exact: true }).click();
   await expect(page).toHaveURL(/\/playlists\/local-list$/);
-  await expect(page.getByRole("button", { name: "Dejar de seguir en Álveo" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dejar de seguir" })).toBeVisible();
 });
 
 test("suscripción desde vídeo respeta permisos y evita repetir la escritura", async ({ page }) => {
