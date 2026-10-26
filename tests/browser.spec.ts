@@ -7,6 +7,16 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+test("el formulario de lista se cierra sin dejar controles activos", async ({ page }) => {
+  await page.goto("/playlists");
+  const toggle = page.getByRole("button", { name: "Nueva lista" });
+  await toggle.click();
+  await expect(page.locator(".edit-panel")).toBeVisible();
+  await toggle.click();
+  await expect(page.locator(".motion-panel")).toHaveAttribute("inert", "");
+  await expect(page.locator(".edit-panel")).toHaveCount(0);
+});
+
 test("marcar un vídeo cambia el botón sin mostrar un aviso de éxito", async ({ page }) => {
   await page.goto("/watch/aqz-KE-bpKQ");
   const button = page.locator(".watch-actions").getByRole("button", { name: /^(Visto|Marcar visto)$/ });
@@ -515,7 +525,7 @@ test("PWA registra SW y no cachea datos personales", async ({ page }) => {
   ]);
   expect(images.every((i) => i.type?.startsWith("image/png"))).toBe(true);
   const installability = await cdp.send("Page.getInstallabilityErrors");
-  console.log("PWA Chrome installability:", JSON.stringify(installability));
+  console.log("PWA Brave installability:", JSON.stringify(installability));
   // Playwright's ordinary isolated contexts are incognito, where installation is disabled.
   expect(
     installability.installabilityErrors.filter(
@@ -524,7 +534,7 @@ test("PWA registra SW y no cachea datos personales", async ({ page }) => {
   ).toEqual([]);
   await cdp.detach();
   const profile = await chromium.launchPersistentContext("", {
-    channel: process.env.PLAYWRIGHT_CHANNEL || "chrome",
+    executablePath: process.env.BRAVE_EXECUTABLE_PATH || "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     headless: true,
   });
   try {
@@ -535,7 +545,7 @@ test("PWA registra SW y no cachea datos personales", async ({ page }) => {
     await session.send("Page.enable");
     await session.send("Page.getAppManifest");
     const result = await session.send("Page.getInstallabilityErrors");
-    console.log("PWA normal Chrome profile:", JSON.stringify(result));
+    console.log("PWA normal Brave profile:", JSON.stringify(result));
     expect(result.installabilityErrors).toEqual([]);
   } finally {
     await profile.close();

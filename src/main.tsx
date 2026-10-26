@@ -36,6 +36,7 @@ import {
 } from "./api";
 import { Icon, State, useResource, VideoCard } from "./ui";
 import { Player } from "./player";
+import { MotionPanel, usePresence } from "./motion";
 import { videoType, type VideoType } from "../shared/video-type";
 import { syncTypeLabels, syncStatusLabel, syncJobPhases, syncJobStatusLabel, isActiveSyncJob, syncJobCounters, syncJobNextAttempt, syncJobNotice, shortText, summarizeSyncDetail, type SyncJob, type SyncSummary } from "./sync-status";
 import { useSyncStatus } from "./use-sync-status";
@@ -208,6 +209,7 @@ function App() {
             location.pathname !== "/settings" ? (
               <Navigate to="/settings" replace />
             ) : (
+              <div className="route-content" key={location.pathname}>
               <Routes>
                 <Route path="/" element={<Navigate to="/feed" replace />} />
                 <Route path="/feed" element={<Feed />} />
@@ -229,6 +231,7 @@ function App() {
                   }
                 />
               </Routes>
+              </div>
             )}
           </main>
         </div>
@@ -669,6 +672,7 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnai
 }) {
   const [save, setSave] = useState(false);
   const [open, setOpen] = useState(false);
+  const menuMounted = usePresence(open);
   const menu = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -692,7 +696,7 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnai
           aria-expanded={open} title="Opciones del vídeo" onClick={() => setOpen((value) => !value)}>
           <Icon name="more" size={18} />
         </button>
-        {open && <div className="video-card-menu-items">
+        {menuMounted && <div className={`video-card-menu-items ${open ? "" : "is-closing"}`} inert={!open} aria-hidden={!open}>
           <button disabled={busy} onClick={() => {
             setOpen(false);
             toggleWatched();
@@ -705,7 +709,7 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnai
         </div>}
       </div>
     } />
-    {save && <SaveVideo id={video.id} onDone={() => setSave(false)} />}
+    <MotionPanel open={save}><SaveVideo id={video.id} onDone={() => setSave(false)} /></MotionPanel>
   </div>;
 }
 function Channels() {
@@ -910,7 +914,7 @@ function ChannelPageContent({ id }: { id: string }) {
             : "Vídeos de este canal guardados en la biblioteca.")}
         </>}
       />
-      {markOpen && <div className="bulk-panel channel-mark-panel">
+      <MotionPanel open={markOpen}><div className="bulk-panel channel-mark-panel">
         <button className="button small secondary" disabled={marking}
           onClick={() => void markChannel(false)}>
           Marcar todos como vistos
@@ -921,7 +925,7 @@ function ChannelPageContent({ id }: { id: string }) {
           onClick={() => void markChannel(true)}>
           {marking ? "Marcando…" : "Marcar como vistos"}
         </button>
-      </div>}
+      </div></MotionPanel>
       <ChannelVideos id={id} data={data} error={error} loading={loading} />
     </>
   );
@@ -1103,14 +1107,14 @@ function Playlists() {
         <button className={!excluded ? "active" : ""} aria-pressed={!excluded} onClick={() => setExcluded(false)}>Listas</button>
         <button className={excluded ? "active" : ""} aria-pressed={excluded} onClick={() => setExcluded(true)}>Excluidos</button>
       </div>
-      {open && (
+      <MotionPanel open={open}>
         <PlaylistForm
           onDone={() => {
             setVersion((v) => v + 1);
             setOpen(false);
           }}
         />
-      )}
+      </MotionPanel>
       {loading && <State>Cargando listas…</State>}
       {error && <State error>{error}</State>}
       <div className="playlist-grid">
@@ -1249,14 +1253,13 @@ function PlaylistPage() {
           {data.followed && <button className="danger-link" onClick={() => setConfirm((value) => !value)}>
             Dejar de seguir
           </button>}
-          {data.followed && confirm && <div className="bulk-panel">
+          {data.followed && <MotionPanel open={confirm}><div className="bulk-panel">
             <button className="button danger" onClick={async () => {
               try { await api(`/api/playlists/${id}`, "DELETE"); navigate("/playlists"); }
               catch (cause) { notify((cause as Error).message); }
             }}>Confirmar</button>
-          </div>}
-          {edit && !data.followed && (
-            <>
+          </div></MotionPanel>}
+          {!data.followed && <MotionPanel open={edit}>
               <PlaylistForm
                 playlist={data}
                 onDone={() => {
@@ -1271,7 +1274,7 @@ function PlaylistPage() {
                 Eliminar lista
                 {data.source === "youtube" ? " de YouTube" : ""}
               </button>
-              {confirm && (
+              <MotionPanel open={confirm}>
                 <div className="bulk-panel">
                   Esta acción no se puede deshacer.
                   <button
@@ -1288,9 +1291,8 @@ function PlaylistPage() {
                     Confirmar eliminación
                   </button>
                 </div>
-              )}
-            </>
-          )}
+              </MotionPanel>
+          </MotionPanel>}
           <div className="video-grid">
             {data.items.map((v) => (
               <VideoOptionsCard
@@ -1620,11 +1622,11 @@ function Watch({
               </a>
             </div>
           </div>
-          {save && <SaveVideo id={id} onDone={() => {
+          <MotionPanel open={save}><SaveVideo id={id} onDone={() => {
             setSave(false);
             void api<Video>(`/api/videos/${id}`).then(change)
               .catch((e) => notify((e as Error).message));
-          }} />}
+          }} /></MotionPanel>
           {video.transient && (
             <p className="muted-note">Guárdalo en una lista para registrar tu progreso.</p>
           )}
@@ -1809,7 +1811,7 @@ function SearchVideoCard({ video }: { video: Video }) {
   return <div className="search-result"><VideoCard video={video} action={<button className="icon-button" aria-label={`Guardar ${video.title} en una lista`}
     aria-expanded={save} title="Guardar en una lista" onClick={() => setSave((value) => !value)}>
     <Icon name="save" size={18} />
-  </button>} />{save && <SaveVideo id={video.id} onDone={() => setSave(false)} />}</div>;
+  </button>} /><MotionPanel open={save}><SaveVideo id={video.id} onDone={() => setSave(false)} /></MotionPanel></div>;
 }
 function SaveVideo({ id, onDone }: { id: string; onDone: () => void }) {
   const { data, error, loading } = useResource<{ items: PlaylistSummary[] }>(
@@ -2233,7 +2235,7 @@ function SettingsPage() {
                 Cerrar sesión
               </button>
             </div>
-            {confirm && (
+            <MotionPanel open={!!confirm}>
               <div className="bulk-panel">
                 <p>
                   Se borrarán los datos locales de esta cuenta. Tus datos en
@@ -2267,7 +2269,7 @@ function SettingsPage() {
                   Cancelar
                 </button>
               </div>
-            )}
+            </MotionPanel>
           </>
         )}
       </section>

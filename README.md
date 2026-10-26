@@ -125,6 +125,6 @@ npm run test:ui
 npm run build
 ~~~
 
-`test:ui` requiere Chrome instalado (o configura `PLAYWRIGHT_CHANNEL`), usa una D1 local separada y desactiva la API key real. Las pruebas de backend usan respuestas simuladas; no escriben en una cuenta YouTube real.
+`test:ui` usa Brave. En macOS lo busca en `/Applications/Brave Browser.app`; en otra ubicación, configura `BRAVE_EXECUTABLE_PATH` con la ruta al ejecutable. Usa una D1 local separada y desactiva la API key real. Las pruebas de backend usan respuestas simuladas; no escriben en una cuenta YouTube real.
 
 Documentación técnica: [WebSub](docs/WEBSUB.md), [costes D1](docs/D1-PERFORMANCE.md) y [validaciones históricas](docs/VALIDACION.md). Referencias de instalación: [YouTube Data API y credenciales](https://developers.google.com/youtube/registering_an_application), [OAuth web](https://developers.google.com/identity/protocols/oauth2/web-server), [configuración de Wrangler](https://developers.cloudflare.com/workers/wrangler/configuration/), [políticas de Access](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/), [One-time PIN](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/) y [bypass de un endpoint](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/).

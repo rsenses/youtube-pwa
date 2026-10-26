@@ -5,7 +5,10 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: "http://localhost:5174",
-    channel: process.env.PLAYWRIGHT_CHANNEL || "chrome",
+    browserName: "chromium",
+    launchOptions: {
+      executablePath: process.env.BRAVE_EXECUTABLE_PATH || "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    },
     headless: true,
     viewport: { width: 390, height: 844 },
     isMobile: true,

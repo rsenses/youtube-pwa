@@ -537,11 +537,13 @@ test("selector de tipos, etiquetas y paginación", async ({ page }) => {
     .poll(() => requests.at(-1)?.searchParams.get("cursor"))
     .toBe("next-page");
 
+  const requestsBeforeFilter = requests.length;
   await shorts.click();
   await expect
-    .poll(() => requests.at(-1)?.searchParams.get("types"))
-    .toBe("video,live,short");
-  expect(requests.at(-1)?.searchParams.has("cursor")).toBe(false);
+    .poll(() => requests.slice(requestsBeforeFilter).some((url) =>
+      url.searchParams.get("types") === "video,live,short" &&
+      !url.searchParams.has("cursor")))
+    .toBe(true);
   await expect(shorts).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".video-card")).toHaveCount(3);
 

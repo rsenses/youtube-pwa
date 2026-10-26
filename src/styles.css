@@ -25,6 +25,9 @@
     --danger: #b3261e;
     --warning: #8a5a00;
     --shadow: 0 1px 2px #302a2814;
+    --motion-fast: 160ms;
+    --motion-standard: 180ms;
+    --motion-ease: cubic-bezier(0.2, 0.65, 0.25, 1);
     color-scheme: light;
 }
 @view-transition {
@@ -344,6 +347,35 @@ label > textarea {
     margin: 0 auto;
     padding: 24px;
 }
+.route-content {
+    min-width: 0;
+    animation: route-in var(--motion-standard) var(--motion-ease) both;
+}
+.motion-panel {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    transition:
+        grid-template-rows var(--motion-standard) var(--motion-ease),
+        opacity var(--motion-standard) ease,
+        transform var(--motion-standard) var(--motion-ease);
+}
+.motion-panel.is-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.motion-panel-inner { min-height: 0; overflow: hidden; }
+@starting-style {
+    .motion-panel.is-open {
+        grid-template-rows: 0fr;
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+}
 .page-heading {
     display: flex;
     align-items: center;
@@ -631,7 +663,14 @@ label > textarea {
     background: var(--surface);
     box-shadow: var(--shadow);
     transform-origin: bottom right;
-    transition: opacity 0.16s ease, transform 0.16s ease;
+    transition:
+        opacity var(--motion-fast) ease,
+        transform var(--motion-fast) var(--motion-ease);
+}
+.video-card-menu-items.is-closing {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+    pointer-events: none;
 }
 @starting-style {
     .video-card-menu-items { opacity: 0; transform: translateY(6px) scale(0.97); }
@@ -991,7 +1030,6 @@ label > textarea {
     border-radius: 12px;
     background: var(--surface-2);
     font-size: 13px;
-    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .bulk-panel > span {
     font-weight: 600;
@@ -1269,7 +1307,6 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--surface);
-    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .edit-panel .button {
     align-self: flex-start;
@@ -1759,7 +1796,6 @@ label > textarea {
     border: 1px solid var(--border);
     border-radius: 12px;
     background: var(--surface);
-    transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .save-panel h3 {
     margin: 0 0 6px;
@@ -1875,6 +1911,10 @@ label > textarea {
         opacity: 1;
         transform: translate(-50%, 0);
     }
+}
+@keyframes route-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 @media (min-width: 701px) {
     .type-filters button,
