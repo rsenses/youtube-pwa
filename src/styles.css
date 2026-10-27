@@ -349,7 +349,7 @@ label > textarea {
 }
 .route-content {
     min-width: 0;
-    animation: route-in var(--motion-standard) var(--motion-ease) both;
+    animation: route-in 260ms var(--motion-ease) both;
 }
 .motion-panel {
     display: grid;
@@ -572,6 +572,12 @@ label > textarea {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 24px 16px;
+}
+.video-grid > .video-options-result,
+.video-grid > .search-result,
+.channels-grid > .channel-card,
+.playlist-grid > .playlist-card {
+    animation: card-in 260ms var(--motion-ease) both;
 }
 .global-search {
     display: flex;
@@ -1727,6 +1733,7 @@ label > textarea {
     border-top: 1px solid var(--border);
     background: var(--surface);
     box-shadow: 0 -4px 20px rgb(0 0 0 / 8%);
+    animation: mini-player-in 260ms var(--motion-ease) both;
 }
 .mini-player .watch-primary {
     display: flex;
@@ -1913,8 +1920,16 @@ label > textarea {
     }
 }
 @keyframes route-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from { opacity: 0.55; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes card-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes mini-player-in {
+    from { opacity: 0.65; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 @media (min-width: 701px) {
     .type-filters button,
@@ -2108,12 +2123,17 @@ label > textarea {
         font-size: 12px;
         font-weight: 500;
         line-height: 1.2;
+        transition: color var(--motion-standard) ease;
+    }
+    .bottom-nav a svg {
+        transition: transform 220ms var(--motion-ease);
     }
     .bottom-nav a.active {
         color: var(--green);
         font-weight: 600;
     }
-    .bottom-nav a.active::before {
+    .bottom-nav a.active svg { transform: translateY(-2px) scale(1.06); }
+    .bottom-nav a::before {
         content: "";
         position: absolute;
         top: 0;
@@ -2121,7 +2141,11 @@ label > textarea {
         height: 2px;
         border-radius: 999px;
         background: var(--green);
+        opacity: 0;
+        transform: scaleX(0.55);
+        transition: opacity 220ms ease, transform 220ms var(--motion-ease);
     }
+    .bottom-nav a.active::before { opacity: 1; transform: scaleX(1); }
     .toast {
         bottom: calc(76px + env(safe-area-inset-bottom));
         font-size: 13px;
