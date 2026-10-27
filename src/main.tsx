@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useRef,
   useState,
+  ViewTransition,
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
@@ -17,6 +18,7 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useNavigationType,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -68,10 +70,15 @@ function App() {
     [error, errorSet] = useState(""),
     [toast, toastSet] = useState("");
   const location = useLocation();
+  const navigationType = useNavigationType();
+  const watching = location.pathname.startsWith("/watch/");
   const watchId = location.pathname.match(/^\/watch\/([^/]+)$/)?.[1];
   const [activeVideoId, setActiveVideoId] = useState<string | null>(
     watchId ?? null,
   );
+  const transitionEnabled = !watching && !activeVideoId;
+  const hasViewTransitions = typeof document.startViewTransition === "function";
+  const routeFallback = transitionEnabled && (!hasViewTransitions || navigationType === "POP");
   useEffect(() => {
     if (watchId) setActiveVideoId(watchId);
   }, [watchId]);
@@ -134,7 +141,34 @@ function App() {
         <State>Cargando…</State>
       </main>
     );
-  const watching = location.pathname.startsWith("/watch/");
+  const routeContent = (
+    <div
+      className={`route-content ${routeFallback ? "route-fallback" : ""}`}
+      key={routeFallback ? location.pathname : undefined}
+    >
+      <Routes>
+        <Route path="/" element={<Navigate to="/feed" replace />} />
+        <Route path="/feed" element={<Feed />} />
+        <Route path="/search" element={<SearchPage />} />
+        <Route path="/channels" element={<Channels />} />
+        <Route path="/channels/:id" element={<ChannelPage />} />
+        <Route path="/playlists" element={<Playlists />} />
+        <Route path="/playlists/external/:id" element={<ExternalPlaylistPage />} />
+        <Route path="/playlists/:id" element={<PlaylistPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/watch/:id" element={null} />
+        <Route
+          path="*"
+          element={
+            <State>
+              No encontramos esta página.{" "}
+              <Link to="/feed">Volver al feed</Link>
+            </State>
+          }
+        />
+      </Routes>
+    </div>
+  );
   return (
     <AppContext.Provider
       value={{
@@ -209,29 +243,11 @@ function App() {
             location.pathname !== "/settings" ? (
               <Navigate to="/settings" replace />
             ) : (
-              <div className="route-content" key={location.pathname}>
-              <Routes>
-                <Route path="/" element={<Navigate to="/feed" replace />} />
-                <Route path="/feed" element={<Feed />} />
-                <Route path="/search" element={<SearchPage />} />
-                <Route path="/channels" element={<Channels />} />
-                <Route path="/channels/:id" element={<ChannelPage />} />
-                <Route path="/playlists" element={<Playlists />} />
-                <Route path="/playlists/external/:id" element={<ExternalPlaylistPage />} />
-                <Route path="/playlists/:id" element={<PlaylistPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/watch/:id" element={null} />
-                <Route
-                  path="*"
-                  element={
-                    <State>
-                      No encontramos esta página.{" "}
-                      <Link to="/feed">Volver al feed</Link>
-                    </State>
-                  }
-                />
-              </Routes>
-              </div>
+              transitionEnabled ? (
+                <ViewTransition default="none" update="page-fade">
+                  {routeContent}
+                </ViewTransition>
+              ) : routeContent
             )}
           </main>
         </div>

@@ -7,6 +7,37 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
+test("la navegación entre páginas usa un fundido y conserva Atrás", async ({ page }) => {
+  await page.goto("/feed");
+  const supported = await page.evaluate(() => {
+    if (!document.startViewTransition) return false;
+    const original = document.startViewTransition.bind(document);
+    Object.defineProperty(document, "startViewTransition", {
+      configurable: true,
+      value: (...args: Parameters<Document["startViewTransition"]>) => {
+        (window as Window & { pageTransitions?: number }).pageTransitions =
+          ((window as Window & { pageTransitions?: number }).pageTransitions ?? 0) + 1;
+        return original(...args);
+      },
+    });
+    return true;
+  });
+  await page.locator(".bottom-nav").getByRole("link", { name: "Canales" }).click();
+  await expect(page).toHaveURL(/\/channels$/);
+  if (supported) {
+    await expect.poll(() => page.evaluate(() =>
+      (window as Window & { pageTransitions?: number }).pageTransitions ?? 0,
+    )).toBeGreaterThan(0);
+  }
+  await page.goBack();
+  await expect(page).toHaveURL(/\/feed(?:\?|$)/);
+  await expect(page.locator(".route-content")).toHaveCSS("animation-name", "route-in");
+  await page.locator(".video-card .thumbnail").first().click();
+  await expect(page.locator(".watch-actions")).toBeVisible();
+  await page.locator(".bottom-nav").getByRole("link", { name: "Feed" }).click();
+  await expect(page.locator(".mini-player")).toBeVisible();
+});
+
 test("el formulario de lista se cierra sin dejar controles activos", async ({ page }) => {
   await page.goto("/playlists");
   const toggle = page.getByRole("button", { name: "Nueva lista" });
@@ -330,7 +361,7 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
     page.getByRole("button", { name: "Reproducir en YouTube" }),
   ).toHaveCount(0);
   await expect(page.locator(".player-poster")).toHaveCount(0);
-  expect(apiLoads).toBeGreaterThan(0);
+  await expect.poll(() => apiLoads).toBeGreaterThan(0);
   const iframe = page.locator(".youtube-host iframe");
   await expect(iframe).toBeVisible();
   expect(await page.evaluate(() => (window as any).__mock.player.opts.playerVars)).toMatchObject({

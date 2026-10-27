@@ -349,7 +349,19 @@ label > textarea {
 }
 .route-content {
     min-width: 0;
+}
+.route-content.route-fallback {
     animation: route-in 260ms var(--motion-ease) both;
+}
+::view-transition-old(root) {
+    animation: none;
+    opacity: 0;
+}
+::view-transition-new(root) { animation: none; }
+::view-transition-old(.page-fade),
+::view-transition-new(.page-fade) {
+    animation-duration: 200ms;
+    animation-timing-function: var(--motion-ease);
 }
 .motion-panel {
     display: grid;
