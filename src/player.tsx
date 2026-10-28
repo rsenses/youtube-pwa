@@ -6,6 +6,11 @@ interface YTPlayer {
     getDuration(): number;
     getPlayerState(): number;
     getIframe(): HTMLIFrameElement;
+    getVolume(): number;
+    setVolume(volume: number): void;
+    isMuted(): boolean;
+    mute(): void;
+    unMute(): void;
 }
 interface YTConstructor {
     new (element: HTMLElement, options: Record<string, unknown>): YTPlayer;
@@ -71,13 +76,70 @@ export function Player({
     demo: boolean;
 }) {
     const [error, setError] = useState(""),
-        [saveError, setSaveError] = useState("");
+        [saveError, setSaveError] = useState(""),
+        [ready, setReady] = useState(false);
     const fictional = demo && video.id.startsWith("demo");
     const host = useRef<HTMLDivElement>(null),
         player = useRef<YTPlayer | null>(null),
         callback = useRef(onProgress),
         position = useRef(video.positionSeconds);
+    const volumeIndicator = useRef<HTMLDivElement>(null);
+    const gesture = useRef<{ pointerId: number; startY: number; startVolume: number; target: number; active: boolean; verified: boolean } | null>(null);
+    const volumeCheck = useRef<number | undefined>(undefined);
     callback.current = onProgress;
+    const hideVolume = () => {
+        if (volumeIndicator.current) volumeIndicator.current.hidden = true;
+    };
+    const endGesture = () => {
+        gesture.current = null;
+        window.clearTimeout(volumeCheck.current);
+        volumeCheck.current = undefined;
+        hideVolume();
+    };
+    const showVolume = (volume: number) => {
+        const indicator = volumeIndicator.current;
+        if (!indicator) return;
+        indicator.style.setProperty("--volume", String(volume));
+        indicator.textContent = `${volume}%`;
+        indicator.hidden = false;
+    };
+    const onGestureMove = (event: React.PointerEvent<HTMLDivElement>) => {
+        const current = gesture.current;
+        const p = player.current;
+        if (!current || event.pointerId !== current.pointerId || !p) return;
+        const distance = current.startY - event.clientY;
+        if (!current.active && Math.abs(distance) < 12) return;
+        current.active = true;
+        const volume = Math.max(0, Math.min(100, Math.round(
+            current.startVolume + distance / event.currentTarget.clientHeight * 100,
+        )));
+        if (volume === current.target) return;
+        current.target = volume;
+        try {
+            if (volume > 0 && p.isMuted()) p.unMute();
+            if (volume === 0) p.mute();
+            p.setVolume(volume);
+        } catch {
+            endGesture();
+            return;
+        }
+        if (current.verified) showVolume(volume);
+        if (volumeCheck.current !== undefined) return;
+        volumeCheck.current = window.setTimeout(() => {
+            volumeCheck.current = undefined;
+            if (gesture.current !== current) return;
+            try {
+                const actual = p.getVolume();
+                current.verified = Number.isFinite(actual) && Math.abs(actual - current.target) <= 1 && (current.target === 0 || !p.isMuted());
+                if (current.verified)
+                    showVolume(actual);
+                else hideVolume();
+            } catch {
+                current.verified = false;
+                hideVolume();
+            }
+        }, 120);
+    };
     useEffect(() => {
         if (fictional || !host.current) return;
         let cancelled = false;
@@ -153,6 +215,7 @@ export function Player({
                     events: {
                         onReady: () => {
                             if (cancelled) return;
+                            setReady(true);
                             setError("");
                             const p = player.current;
                             if (p) {
@@ -185,6 +248,8 @@ export function Player({
                 if (!cancelled) setError(e.message);
             });
         return () => {
+            endGesture();
+            setReady(false);
             if (player.current?.getPlayerState() === 1) void persist();
             cancelled = true;
             clearInterval(timer);
@@ -202,6 +267,27 @@ export function Player({
                     </p>
                 ) : (
                     <div className="youtube-host" ref={host} />
+                )}
+                {ready && !fictional && (
+                    <>
+                        <div className="volume-gesture-zone" onPointerDown={(event) => {
+                            if (event.pointerType !== "touch" || !player.current) return;
+                            try {
+                                const volume = player.current.getVolume();
+                                if (!Number.isFinite(volume)) return;
+                                gesture.current = {
+                                    pointerId: event.pointerId,
+                                    startY: event.clientY,
+                                    startVolume: volume,
+                                    target: volume,
+                                    active: false,
+                                    verified: false,
+                                };
+                                event.currentTarget.setPointerCapture(event.pointerId);
+                            } catch { /* The player may still be initializing. */ }
+                        }} onPointerMove={onGestureMove} onPointerUp={endGesture} onPointerCancel={endGesture} aria-hidden="true" />
+                        <div className="volume-indicator" ref={volumeIndicator} hidden aria-hidden="true" />
+                    </>
                 )}
             </div>
             {error && (

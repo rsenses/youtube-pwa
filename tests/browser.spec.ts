@@ -325,11 +325,13 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
     await route.fulfill({
       contentType: "application/javascript",
       body: `
-    window.__mock={constructs:0,destroys:0,seconds:0,state:1};
+    window.__mock={constructs:0,destroys:0,seconds:0,state:1,volume:50,muted:false,ignoreVolume:false,setVolumes:[]};
     window.YT={Player:class {
       constructor(el,opts){this.opts=opts;this.iframe=document.createElement('iframe');this.iframe.srcdoc='<body style="background:#101813;color:white">Player simulado para verificar el contenedor, no reproducción real</body>';el.replaceWith(this.iframe);window.__mock.constructs++;window.__mock.player=this;setTimeout(()=>opts.events.onReady(),10)}
       getIframe(){return this.iframe} getCurrentTime(){return window.__mock.seconds} getDuration(){return 100}
       getPlayerState(){return window.__mock.state} getAvailablePlaybackRates(){return [.5,1,1.5,2]}
+      getVolume(){return window.__mock.volume} setVolume(volume){if(!window.__mock.ignoreVolume)window.__mock.volume=volume;window.__mock.setVolumes.push(volume)}
+      isMuted(){return window.__mock.muted} mute(){window.__mock.muted=true} unMute(){window.__mock.muted=false}
       setPlaybackRate(rate){window.__mock.rate=rate} playVideo(){window.__mock.playCalls=(window.__mock.playCalls||0)+1} pauseVideo(){}
       destroy(){window.__mock.destroys++;this.iframe.remove()}
     }};
@@ -372,6 +374,31 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
     0,
   );
   const identity = await iframe.elementHandle();
+  const touch = await page.context().newCDPSession(page);
+  const swipeVolume = async (distance: number) => {
+    const zone = await page.locator(".volume-gesture-zone").boundingBox();
+    expect(zone).not.toBeNull();
+    const x = zone!.x + zone!.width / 2;
+    const y = zone!.y + zone!.height / 2;
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + distance, id: 1 }] });
+  };
+  await swipeVolume(-50);
+  await expect(page.locator(".volume-indicator")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__mock.volume)).toBeGreaterThan(50);
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect(page.locator(".volume-indicator")).toBeHidden();
+  await swipeVolume(200);
+  await expect(page.locator(".volume-indicator")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__mock.volume)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__mock.muted)).toBe(true);
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.evaluate(() => { (window as any).__mock.ignoreVolume = true; });
+  await swipeVolume(-60);
+  await page.waitForTimeout(180);
+  await expect(page.locator(".volume-indicator")).toBeHidden();
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.evaluate(() => { (window as any).__mock.ignoreVolume = false; });
   const progressResponse = page.waitForResponse(
     (r) =>
       r.url().endsWith("/api/videos/M7lc1UVf-VE/progress") &&
@@ -393,6 +420,11 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   expect(box?.y).toBe(0);
   expect(box?.width).toBe(844);
   expect(box?.height).toBe(390);
+  await page.evaluate(() => { (window as any).__mock.muted = true; });
+  await swipeVolume(-40);
+  await expect(page.locator(".volume-indicator")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__mock.muted)).toBe(false);
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(false);
   expect(
     await iframe.evaluate((el, original) => el === original, identity),
