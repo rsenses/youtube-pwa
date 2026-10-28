@@ -1590,15 +1590,32 @@ label > textarea {
     right: 0;
     bottom: 22%;
     width: clamp(24px, 6.25%, 48px);
+    border: 1px solid #ff4d9b;
+    border-right: 0;
+    border-radius: 10px 0 0 10px;
+    background: rgb(255 45 125 / 42%);
     touch-action: none;
+}
+.volume-gesture-zone::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: white;
+    content: "VOL ↑↓";
+    font-size: 11px;
+    font-weight: 800;
+    text-shadow: 0 1px 2px #321018;
+    writing-mode: vertical-rl;
+    pointer-events: none;
 }
 .volume-indicator {
     position: absolute;
     z-index: 2;
     top: 50%;
     right: calc(clamp(24px, 6.25%, 48px) + 12px);
-    width: 38px;
-    height: 116px;
+    width: 64px;
+    height: 140px;
     padding: 8px 4px;
     transform: translateY(-50%);
     border-radius: 14px;
@@ -1607,6 +1624,7 @@ label > textarea {
     font-size: 11px;
     font-weight: 700;
     text-align: center;
+    white-space: pre-line;
     pointer-events: none;
 }
 .volume-indicator::after {
@@ -1796,6 +1814,8 @@ label > textarea {
     flex: 0 0 170px;
     pointer-events: none;
 }
+.mini-player .volume-gesture-zone,
+.mini-player .volume-indicator { display: none; }
 .mini-player .player-viewport {
     border-radius: 0;
 }

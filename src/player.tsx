@@ -96,11 +96,11 @@ export function Player({
         volumeCheck.current = undefined;
         hideVolume();
     };
-    const showVolume = (volume: number) => {
+    const showVolume = (volume: number, status = "") => {
         const indicator = volumeIndicator.current;
         if (!indicator) return;
         indicator.style.setProperty("--volume", String(volume));
-        indicator.textContent = `${volume}%`;
+        indicator.textContent = `${volume}%${status ? `\n${status}` : ""}`;
         indicator.hidden = false;
     };
     const onGestureMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -131,12 +131,12 @@ export function Player({
             try {
                 const actual = p.getVolume();
                 current.verified = Number.isFinite(actual) && Math.abs(actual - current.target) <= 1 && (current.target === 0 || !p.isMuted());
-                if (current.verified)
-                    showVolume(actual);
-                else hideVolume();
+                if (Number.isFinite(actual))
+                    showVolume(actual, current.verified ? "" : "Sin cambio");
+                else if (volumeIndicator.current) volumeIndicator.current.textContent = "No disponible";
             } catch {
                 current.verified = false;
-                hideVolume();
+                if (volumeIndicator.current) volumeIndicator.current.textContent = "No disponible";
             }
         }, 120);
     };
@@ -274,7 +274,14 @@ export function Player({
                             if (event.pointerType !== "touch" || !player.current) return;
                             try {
                                 const volume = player.current.getVolume();
-                                if (!Number.isFinite(volume)) return;
+                                if (!Number.isFinite(volume)) {
+                                    if (volumeIndicator.current) {
+                                        volumeIndicator.current.textContent = "No disponible";
+                                        volumeIndicator.current.hidden = false;
+                                    }
+                                    return;
+                                }
+                                showVolume(volume, player.current.isMuted() ? "Silencio" : "");
                                 gesture.current = {
                                     pointerId: event.pointerId,
                                     startY: event.clientY,

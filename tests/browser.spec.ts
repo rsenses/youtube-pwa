@@ -395,8 +395,8 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await page.evaluate(() => { (window as any).__mock.ignoreVolume = true; });
   await swipeVolume(-60);
-  await page.waitForTimeout(180);
-  await expect(page.locator(".volume-indicator")).toBeHidden();
+  await expect(page.locator(".volume-indicator")).toContainText("Sin cambio");
+  await expect(page.locator(".volume-indicator")).toContainText("0%");
   await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await page.evaluate(() => { (window as any).__mock.ignoreVolume = false; });
   const progressResponse = page.waitForResponse(
