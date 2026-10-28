@@ -374,6 +374,15 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
     0,
   );
   const identity = await iframe.elementHandle();
+  const fullscreenSpotIsFree = async (heightFraction: number) => {
+    const box = await page.locator(".player-viewport").boundingBox();
+    expect(box).not.toBeNull();
+    return page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName === "IFRAME", {
+      x: box!.x + box!.width - 32,
+      y: box!.y + box!.height * heightFraction,
+    });
+  };
+  expect(await fullscreenSpotIsFree(0.56)).toBe(true);
   const touch = await page.context().newCDPSession(page);
   const swipeVolume = async (distance: number) => {
     const zone = await page.locator(".volume-gesture-zone").boundingBox();
@@ -421,6 +430,7 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   expect(box?.y).toBe(0);
   expect(box?.width).toBe(844);
   expect(box?.height).toBe(390);
+  expect(await fullscreenSpotIsFree(0.75)).toBe(true);
   await page.evaluate(() => { (window as any).__mock.muted = true; });
   await swipeVolume(-40);
   await expect(page.locator(".volume-indicator")).toBeVisible();

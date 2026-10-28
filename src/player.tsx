@@ -111,7 +111,7 @@ export function Player({
         if (!current.active && Math.abs(distance) < 12) return;
         current.active = true;
         const volume = Math.max(0, Math.min(100, Math.round(
-            current.startVolume + distance / event.currentTarget.clientHeight * 100,
+            current.startVolume + distance / (event.currentTarget.parentElement?.clientHeight || event.currentTarget.clientHeight) * 100,
         )));
         if (volume === current.target) return;
         current.target = volume;

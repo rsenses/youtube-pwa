@@ -1586,9 +1586,9 @@ label > textarea {
 .volume-gesture-zone {
     position: absolute;
     z-index: 1;
-    top: 22%;
+    top: 24%;
     right: 8px;
-    bottom: 22%;
+    bottom: 54%;
     width: clamp(48px, 8%, 72px);
     background: rgb(0 0 0 / 1%);
     touch-action: none;
