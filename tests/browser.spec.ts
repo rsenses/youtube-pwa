@@ -378,8 +378,9 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
   const swipeVolume = async (distance: number) => {
     const zone = await page.locator(".volume-gesture-zone").boundingBox();
     expect(zone).not.toBeNull();
-    const x = zone!.x + zone!.width / 2;
+    const x = page.viewportSize()!.width - 32;
     const y = zone!.y + zone!.height / 2;
+    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains("volume-gesture-zone"), { x, y })).toBe(true);
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + distance, id: 1 }] });
   };

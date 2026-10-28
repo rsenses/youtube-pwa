@@ -1587,16 +1587,17 @@ label > textarea {
     position: absolute;
     z-index: 1;
     top: 22%;
-    right: 0;
+    right: 8px;
     bottom: 22%;
-    width: clamp(24px, 6.25%, 48px);
+    width: clamp(48px, 8%, 72px);
+    background: rgb(0 0 0 / 1%);
     touch-action: none;
 }
 .volume-indicator {
     position: absolute;
     z-index: 2;
     top: 50%;
-    right: calc(clamp(24px, 6.25%, 48px) + 12px);
+    right: calc(clamp(48px, 8%, 72px) + 20px);
     width: 64px;
     height: 140px;
     padding: 8px 4px;
