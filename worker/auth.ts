@@ -346,7 +346,10 @@ export async function getValidAccessToken(
     : Number.POSITIVE_INFINITY;
   if (Number.isFinite(expiresAt) && expiresAt > Date.now() + 60_000)
     return accessToken;
-  if (!row.refresh_token_enc) throw reconnectError();
+  if (!row.refresh_token_enc) {
+    await markAccountDisconnected(env, accountId);
+    throw reconnectError();
+  }
 
   const refreshToken = await decryptToken(secret, row.refresh_token_enc);
   try {
@@ -355,18 +358,9 @@ export async function getValidAccessToken(
     return refreshed.access_token;
   } catch (error) {
     if (error instanceof ExternalError && error.reason === "invalid_grant") {
-      // Revocation/expiry requires prompt deletion of the corresponding data,
-      // not just a flag. Reuse the disconnect cleanup (best effort).
-      try {
-        const account = await getAccount(env.DB, accountId);
-        if (account) {
-          await handleDisconnect(env, account);
-        } else {
-          await markAccountDisconnected(env, accountId);
-        }
-      } catch {
-        await markAccountDisconnected(env, accountId);
-      }
+      // Google authorization can expire independently of local user data.
+      // Require reauthorization while preserving watch states and exclusions.
+      await markAccountDisconnected(env, accountId);
       throw reconnectError();
     }
     throw error;
