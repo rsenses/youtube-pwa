@@ -346,6 +346,21 @@ async function importLibrary() {
   return id;
 }
 describe("durable queue synchronization", () => {
+  it("preserves missing channels in scheduled jobs and reconciles them only on manual updates", async () => {
+    const missing = "UC" + "d".repeat(22);
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO channels(id,title,created_at,updated_at) VALUES (?,'Missing',?,?)").bind(missing, old, old),
+      env.DB.prepare("INSERT INTO subscriptions(account_id,channel_id,active,excluded,generation,created_at,updated_at) VALUES (?,?,1,1,'previous',?,?)").bind(account.id, missing, old, old),
+    ]);
+
+    await startQueuedSync(env, account, "subscriptions", false);
+    await drain();
+    expect(await env.DB.prepare("SELECT active,excluded FROM subscriptions WHERE account_id=? AND channel_id=?").bind(account.id, missing).first()).toMatchObject({ active: 1, excluded: 1 });
+
+    await startQueuedSync(env, account, "subscriptions", true);
+    await drain();
+    expect(await env.DB.prepare("SELECT active,excluded FROM subscriptions WHERE account_id=? AND channel_id=?").bind(account.id, missing).first()).toMatchObject({ active: 0, excluded: 1 });
+  });
   it("does not reimport old RSS, unchanged playlists or old details on the next normal update", async () => {
     await importLibrary();
     expect(

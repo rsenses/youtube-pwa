@@ -101,6 +101,8 @@ Para WebSub, genera **otro** valor aleatorio estable (mínimo 16 caracteres), c�
 
 En la primera visita, entra por Access, conecta Google desde Configuración y sincroniza las suscripciones. Cada persona conecta **su propia** cuenta Google; sus listas y estados quedan separados en D1. Las listas propias normales se importan inicialmente; después el catálogo y cada lista se actualizan manualmente. Las listas ajenas encontradas en la búsqueda se pueden seguir y se importan en segundo plano. Los vídeos nuevos llegan mediante WebSub y reconciliación RSS si lo activaste. Las miniaturas de vídeos pendientes del feed se guardan en R2 y se eliminan cuando dejan de necesitarlas.
 
+Para una instalación permanente, comprueba en Google Cloud que la pantalla OAuth esté **In production**. En **Testing**, Google caduca los permisos de los usuarios de prueba a los siete días para estos scopes; la renovación automática deja de funcionar y cada persona debe autorizar de nuevo. La app conserva sus estados y listas cuando ocurre. Una app personal para menos de 100 personas puede continuar sin verificación, aunque Google puede mostrar el aviso de aplicación no verificada; consulta la [documentación de Google sobre audiencia](https://support.google.com/cloud/answer/15549945) y [cuándo no se exige verificación](https://support.google.com/cloud/answer/13464323).
+
 ### 5. Comprueba y actualiza
 
 Sin sesión, tu dominio debe redirigir a Access. Tras entrar, comprueba búsqueda, página de canal, listas, feed y una sincronización. Con WebSub activo, una petición sin parámetros a `/api/websub/youtube` debe llegar al Worker y fallar por validación; no debe redirigir a Access. Comprueba su alcance sin quitar protección al resto de la app.

@@ -363,13 +363,14 @@ export async function handleSync(
   env: Env,
   account: AccountRow,
   type: SyncType,
+  manual = true,
 ): Promise<SyncSummary> {
   if (env.MODE === "demo") return recordNoop(env, account, type);
   if (isWebSubEnabled(env)) {
     requireConnectedAccount(account);
     if (type === "all") type = "subscriptions";
   }
-  if (env.SYNC_QUEUE) return startQueuedSync(env, account, type);
+  if (env.SYNC_QUEUE) return startQueuedSync(env, account, type, manual);
   const requestedAll = type === "all";
   if (env.SYNC_PROFILE === "free") {
     if (requestedAll) {
@@ -395,7 +396,7 @@ export async function handleSync(
   await purgeExpiredMetadata(env.DB);
   if (type === "all") {
     const result = await withLease(env, account, "all", () =>
-      runAll(env, account),
+      runAll(env, account, manual),
     );
     return {
       type,
@@ -408,7 +409,7 @@ export async function handleSync(
     };
   }
   const result = await withLease(env, account, type, () =>
-    runType(env, account, type),
+    runType(env, account, type, manual),
   );
   return {
     type,
@@ -431,14 +432,15 @@ async function runType(
   env: Env,
   account: AccountRow,
   type: SyncType,
+  manual: boolean,
 ): Promise<SyncOutcome> {
-  if (type === "subscriptions") return syncSubscriptions(env, account);
+  if (type === "subscriptions") return syncSubscriptions(env, account, manual);
   if (type === "rss") return syncRss(env, account, isWebSubEnabled(env));
-  if (type === "playlists") return syncPlaylists(env, account);
+  if (type === "playlists") return syncPlaylists(env, account, manual);
   throw new HttpError(400, "VALIDATION_ERROR", "Invalid sync type.");
 }
 
-async function runAll(env: Env, account: AccountRow): Promise<SyncOutcome> {
+async function runAll(env: Env, account: AccountRow, manual: boolean): Promise<SyncOutcome> {
   const summaries: Array<{
     type: SyncType;
     status: string;
@@ -451,7 +453,7 @@ async function runAll(env: Env, account: AccountRow): Promise<SyncOutcome> {
   for (const type of ["subscriptions", "rss"] as const) {
     try {
       const result = await withLease(env, account, type, () =>
-        runType(env, account, type),
+        runType(env, account, type, manual),
       );
       summaries.push({
         type,
@@ -533,10 +535,10 @@ function subscriptionStatement(
   ).bind(accountId, channelId, remoteId, generation, now, now, now, accountId);
 }
 
-export async function syncSubscriptionStep(env: Env, account: AccountRow) {
+export async function syncSubscriptionStep(env: Env, account: AccountRow, manual = true) {
   return (
     await withLease(env, account, "subscriptions", () =>
-      syncSubscriptions({ ...env, SYNC_PROFILE: "free" }, account),
+      syncSubscriptions({ ...env, SYNC_PROFILE: "free" }, account, manual),
     )
   ).outcome;
 }
@@ -544,6 +546,7 @@ export async function syncSubscriptionStep(env: Env, account: AccountRow) {
 async function syncSubscriptions(
   env: Env,
   account: AccountRow,
+  manual: boolean,
 ): Promise<SyncOutcome> {
   requireConnectedAccount(account);
   const token = await getValidAccessToken(env, account.id);
@@ -617,16 +620,18 @@ async function syncSubscriptions(
   }
 
   if (complete) {
-    await executeStatements(env, [
-      env.DB.prepare(
+    const statements: D1PreparedStatement[] = [];
+    if (manual) {
+      statements.push(env.DB.prepare(
         `UPDATE subscriptions SET active = 0, updated_at = ?
          WHERE account_id = ? AND generation IS NOT NULL AND generation <> ?
            AND updated_at < ?`,
-      ).bind(now, account.id, generation, runStartedAt),
-      env.DB.prepare(
+      ).bind(now, account.id, generation, runStartedAt));
+    }
+    statements.push(env.DB.prepare(
         `UPDATE subscriptions SET last_synced_at = ? WHERE account_id = ? AND active = 1`,
-      ).bind(now, account.id),
-    ]);
+      ).bind(now, account.id));
+    await executeStatements(env, statements);
   }
 
   if (free)
@@ -1132,6 +1137,7 @@ async function importPlaylistItems(
 async function syncPlaylists(
   env: Env,
   account: AccountRow,
+  manual: boolean,
 ): Promise<SyncOutcome> {
   requireConnectedAccount(account);
   const token = await getValidAccessToken(env, account.id);
@@ -1187,7 +1193,7 @@ async function syncPlaylists(
     }
   }
 
-  if (listComplete) {
+  if (listComplete && manual) {
     await env.DB.prepare(
       `DELETE FROM playlists WHERE account_id = ? AND source = 'youtube' AND followed=0
       AND fetched_at < ? AND updated_at < ?`,
@@ -1435,7 +1441,7 @@ export async function runScheduledSync(
   }
   for (const account of accounts) {
     try {
-      await handleSync(env, account, type);
+      await handleSync(env, account, type, false);
     } catch {
       // The failed step is recorded in sync_runs; scheduled runs must not throw.
     }

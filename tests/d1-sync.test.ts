@@ -685,6 +685,18 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     ).toBe("error");
     vi.unstubAllGlobals();
   });
+  it("keeps missing subscriptions active during automatic synchronization", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ items: [] })));
+    try {
+      const result = await handleSync(env, account, "subscriptions", false);
+      expect(result.status).toBe("success");
+      expect(await env.DB.prepare(
+        "SELECT active FROM subscriptions WHERE account_id=? AND channel_id=?",
+      ).bind(account.id, "UCold").first()).toMatchObject({ active: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("reconciles missing subscriptions only after a complete snapshot", async () => {
     vi.stubGlobal(
       "fetch",

@@ -324,7 +324,8 @@ export async function queuedSyncStatus(
 }
 
 async function subscriptionStep(env: Env, account: AccountRow, s: State) {
-  const result = await syncSubscriptionStep(env, account);
+  // Scheduled jobs import new subscriptions but never hide existing channels.
+  const result = await syncSubscriptionStep(env, account, s.force);
   s.items += result.items;
   if (!result.more) s.phase = s.requested === "subscriptions" ? "done" : "rss";
 }
@@ -506,7 +507,7 @@ async function playlistSummaries(env: Env, account: AccountRow, s: State) {
   if (!s.pageToken) {
     // Only a complete remote snapshot may remove remote lists. Local edits newer
     // than the snapshot start are preserved; local lists are never reconciled here.
-    if (!s.playlistId)
+    if (!s.playlistId && s.force)
       await env.DB.prepare(
         "DELETE FROM playlists WHERE account_id=? AND source='youtube' AND followed=0 AND fetched_at<? AND updated_at<?",
       )
