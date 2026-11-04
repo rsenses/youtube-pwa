@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from "re
 import { Link } from "react-router-dom";
 import { api, dateLabel, duration, videoThumbnail, videoUrl, type Video } from "./api";
 import { videoType } from "../shared/video-type";
+import { usePlayback } from "./playback";
 export function Icon({ name, size = 22 }: { name: string; size?: number }) {
     const paths: Record<string, ReactNode> = {
         feed: (
@@ -166,6 +167,8 @@ export function VideoCard({
     action?: ReactNode;
     renderAction?: (controls: { toggleWatched: () => void; busy: boolean }) => ReactNode;
 }) {
+    const playback = usePlayback();
+    const queued = playback.current === video.id || playback.pending.some(v => v.id === video.id);
     const [busy, setBusy] = useState(false),
         [error, setError] = useState(""),
         [swipe, setSwipe] = useState(0),
@@ -244,6 +247,7 @@ export function VideoCard({
             onTouchEnd={touchEnd}
             onTouchCancel={() => { start.current = null; swipeDistance.current = 0; setSwipe(0); }}
             onClickCapture={(event) => {
+                playback.remember(video);
                 if (Date.now() < suppressClickUntil.current) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -317,6 +321,7 @@ export function VideoCard({
                 )}
             </div>
             <div className="card-actions">
+                <button className="icon-button" disabled={queued} aria-label={queued ? `${video.title} ya está en la cola` : `Añadir a la cola: ${video.title}`} title={queued ? "En la cola" : "Añadir a la cola"} onClick={() => playback.add(video)}><Icon name={queued ? "check" : "lists"} size={18} /></button>
                 {renderAction?.({ toggleWatched: () => void toggle(), busy }) ?? action ?? (!video.transient && <button
                     className={`icon-button ${video.watched ? "active" : ""}`}
                     aria-label={

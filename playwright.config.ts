@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
-  testMatch: ["browser.spec.ts", "feed.spec.ts", "sync-queue.spec.ts"],
+  testMatch: ["browser.spec.ts", "feed.spec.ts", "sync-queue.spec.ts", "playback.spec.ts"],
   workers: 1,
   use: {
     baseURL: "http://localhost:5174",

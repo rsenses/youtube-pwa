@@ -38,6 +38,8 @@ import {
 } from "./api";
 import { Icon, State, useResource, VideoCard } from "./ui";
 import { Player } from "./player";
+import { PlaybackProvider, usePlayback } from "./playback";
+import { videoThumbnail } from "./api";
 import { MotionPanel, usePresence } from "./motion";
 import { videoType, type VideoType } from "../shared/video-type";
 import { syncTypeLabels, syncStatusLabel, syncJobPhases, syncJobStatusLabel, isActiveSyncJob, syncJobCounters, syncJobNextAttempt, syncJobNotice, shortText, summarizeSyncDetail, type SyncJob, type SyncSummary } from "./sync-status";
@@ -65,6 +67,9 @@ function matchesSearch(query: string, ...values: string[]) {
   return !needle || values.some((value) => normalize(value).includes(needle));
 }
 function App() {
+  return <PlaybackProvider initial={window.location.pathname.match(/^\/watch\/([^/]+)$/)?.[1] ?? null}><AppContent /></PlaybackProvider>;
+}
+function AppContent() {
   const [session, sessionSet] = useState<SessionInfo | null>(null),
     [settings, settingsSet] = useState<Settings>({ theme: "system", pureBlack: false }),
     [error, errorSet] = useState(""),
@@ -73,9 +78,9 @@ function App() {
   const navigationType = useNavigationType();
   const watching = location.pathname.startsWith("/watch/");
   const watchId = location.pathname.match(/^\/watch\/([^/]+)$/)?.[1];
-  const [activeVideoId, setActiveVideoId] = useState<string | null>(
-    watchId ?? null,
-  );
+  const playback = usePlayback();
+  const activeVideoId = playback.current;
+  const setActiveVideoId = (id: string | null) => playback.dispatch(id ? { type: "play", id } : { type: "close" });
   const transitionEnabled = !watching && !activeVideoId;
   const hasViewTransitions = typeof document.startViewTransition === "function";
   const routeFallback = transitionEnabled && (!hasViewTransitions || navigationType === "POP");
@@ -232,7 +237,6 @@ function App() {
           >
             {activeVideoId && (
               <Watch
-                key={activeVideoId}
                 id={activeVideoId}
                 minimized={!watching || watchId !== activeVideoId}
                 onClose={() => setActiveVideoId(null)}
@@ -1480,7 +1484,7 @@ function SubscribeChannel({ channelId, subscribed: knownSubscribed }: { channelI
   );
 }
 function Watch({
-  id,
+  id: requestedId,
   minimized,
   onClose,
 }: {
@@ -1488,12 +1492,30 @@ function Watch({
   minimized: boolean;
   onClose: () => void;
 }) {
-  const {
-    data: video,
-    setData: setVideo,
-    error,
-    loading,
-  } = useResource<Video>(`/api/videos/${id}`);
+  const playback = usePlayback();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [video, setVideo] = useState<Video | null>(() => playback.getVideo(requestedId) ?? null);
+  const [error, setError] = useState("");
+  const [queueOpen, setQueueOpen] = useState(false);
+  useEffect(() => {
+    setError("");
+    const known = playback.getVideo(requestedId);
+    if (known) { setVideo(known); return; }
+    const controller = new AbortController();
+    api<Video>(`/api/videos/${requestedId}`, "GET", undefined, controller.signal)
+      .then(v => { playback.remember(v); setVideo(v); })
+      .catch(e => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
+  }, [requestedId]);
+  const id = video?.id ?? requestedId;
+  const advanceFrom = (endedId: string) => {
+    if (playback.current !== endedId) return;
+    const next = playback.pending[0];
+    playback.dispatch({ type: "next", id: endedId });
+    if (next && location.pathname.startsWith("/watch/")) navigate(`/watch/${next.id}`, { replace: true });
+  };
+  const advance = () => advanceFrom(id);
   const [related, setRelated] = useState(false);
   const {
     data: suggestions,
@@ -1511,6 +1533,7 @@ function Watch({
   const change = useCallback(
     (v: Video) => {
       revisionRef.current = v.revision ?? revisionRef.current;
+      playback.remember(v);
       setVideo(v);
     },
     [setVideo],
@@ -1518,11 +1541,17 @@ function Watch({
   useEffect(() => {
     if (video) revisionRef.current = video.revision ?? 0;
   }, [video]);
-  if (loading) return minimized ? null : <State>Cargando vídeo…</State>;
-  if (error || !video)
+  useEffect(() => {
+    setSave(false);
+    setComments(false);
+    setRelated(false);
+  }, [id]);
+  if (!video && !error) return minimized ? null : <State>Cargando vídeo…</State>;
+  if (!video)
     return (
       <State error>
         {error || "Vídeo no disponible."} <Link to="/feed">Volver al feed</Link>
+        {playback.pending.length > 0 && <button onClick={() => advanceFrom(requestedId)}>Saltar al siguiente</button>}
       </State>
     );
   return (
@@ -1533,7 +1562,27 @@ function Watch({
           onProgress={change}
           revisionRef={revisionRef}
           demo={session.mode === "demo"}
+          onEnded={advance}
+          onUnavailable={advance}
         />
+        <div className="queue-toolbar">
+          <button className="button small secondary" onClick={() => setQueueOpen(!queueOpen)} aria-expanded={queueOpen}>Cola ({playback.pending.length})</button>
+          <button className="button small secondary" disabled={!playback.pending.length} onClick={advance}>Siguiente</button>
+        </div>
+        {error && <p role="alert">{error} {playback.pending.length > 0 && <button onClick={() => advanceFrom(requestedId)}>Saltar al siguiente</button>}</p>}
+        {queueOpen && <section className="playback-queue" aria-label="Cola de reproducción">
+          <strong>Reproduciendo</strong>
+          <div className="queue-item"><img src={videoThumbnail(video)} alt="" /><span>{video.title}<small>{video.channelTitle}</small></span></div>
+          <div className="section-title"><h2>Pendientes</h2><button disabled={!playback.pending.length} onClick={() => playback.dispatch({ type: "clear" })}>Vaciar cola</button></div>
+          {!playback.pending.length && <p>No hay vídeos pendientes.</p>}
+          <ol>{playback.pending.map((v, index) => <li key={v.id} className="queue-item">
+            <img src={videoThumbnail(v)} alt="" />
+            <button className="queue-video" onClick={() => { playback.dispatch({ type: "jump", id: v.id }); if (location.pathname.startsWith("/watch/")) navigate(`/watch/${v.id}`, { replace: true }); }}>{v.title}<small>{v.channelTitle}</small></button>
+            <button aria-label={`Subir ${v.title}`} disabled={index === 0} onClick={() => playback.dispatch({ type: "move", id: v.id, offset: -1 })}>↑</button>
+            <button aria-label={`Bajar ${v.title}`} disabled={index === playback.pending.length - 1} onClick={() => playback.dispatch({ type: "move", id: v.id, offset: 1 })}>↓</button>
+            <button aria-label={`Quitar ${v.title}`} onClick={() => playback.dispatch({ type: "remove", id: v.id })}>×</button>
+          </li>)}</ol>
+        </section>}
         {minimized && (
           <div className="mini-player-controls">
             <Link

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { api, type Video } from "./api";
 interface YTPlayer {
     destroy(): void;
+    loadVideoById(options: { videoId: string; startSeconds: number }): void;
+    playVideo(): void;
     getCurrentTime(): number;
     getDuration(): number;
     getPlayerState(): number;
@@ -69,11 +71,15 @@ export function Player({
     onProgress,
     revisionRef,
     demo,
+    onEnded,
+    onUnavailable,
 }: {
     video: Video;
     onProgress: (v: Video) => void;
     revisionRef: MutableRefObject<number>;
     demo: boolean;
+    onEnded: () => void;
+    onUnavailable: () => void;
 }) {
     const [error, setError] = useState(""),
         [saveError, setSaveError] = useState(""),
@@ -81,8 +87,14 @@ export function Player({
     const fictional = demo && video.id.startsWith("demo");
     const host = useRef<HTMLDivElement>(null),
         player = useRef<YTPlayer | null>(null),
-        callback = useRef(onProgress),
-        position = useRef(video.positionSeconds);
+        callback = useRef(onProgress);
+    const latest = useRef({ video, onEnded, onUnavailable });
+    latest.current = { video, onEnded, onUnavailable };
+    const loadedId = useRef<string | null>(null);
+    const handledEnd = useRef(false);
+    const hasPlayed = useRef(true);
+    const transitionTimer = useRef<number | undefined>(undefined);
+    const [blocked, setBlocked] = useState(false);
     const volumeIndicator = useRef<HTMLDivElement>(null);
     const gesture = useRef<{ pointerId: number; startY: number; startVolume: number; target: number; active: boolean; verified: boolean } | null>(null);
     const volumeCheck = useRef<number | undefined>(undefined);
@@ -140,123 +152,125 @@ export function Player({
             }
         }, 120);
     };
+    const persistNow = useRef<() => void>(() => {});
     useEffect(() => {
         if (fictional || !host.current) return;
         let cancelled = false;
-        let timer: number | undefined;
-        let lastTime = 0;
-        let inFlight = false;
+        loadYouTube().then(() => {
+            if (cancelled || !host.current || !window.YT) return;
+            const mount = document.createElement("div");
+            host.current.replaceChildren(mount);
+            const initial = latest.current.video;
+            loadedId.current = initial.id;
+            hasPlayed.current = true;
+            handledEnd.current = false;
+            player.current = new window.YT.Player(mount, {
+                videoId: initial.id, width: "100%", height: "100%",
+                playerVars: { playsinline: 1, iv_load_policy: 3, rel: 0,
+                    origin: window.location.origin, start: Math.floor(initial.positionSeconds) },
+                events: {
+                    onReady: () => {
+                        if (cancelled) return;
+                        const iframe = player.current?.getIframe();
+                        if (iframe) {
+                            iframe.title = "Reproductor oficial de YouTube";
+                            iframe.allow = "autoplay; fullscreen; encrypted-media; picture-in-picture";
+                        }
+                        setReady(true);
+                    },
+                    onStateChange: (event: { data: number }) => {
+                        if (cancelled) return;
+                        if (event.data === 1) {
+                            clearTimeout(transitionTimer.current);
+                            setBlocked(false);
+                            setError("");
+                            handledEnd.current = false;
+                            hasPlayed.current = true;
+                        }
+                        if (event.data === 0 || event.data === 2) persistNow.current();
+                        if (event.data === 0 && hasPlayed.current && !handledEnd.current) {
+                            handledEnd.current = true;
+                            latest.current.onEnded();
+                        }
+                    },
+                    onError: (event: { data: number }) => {
+                        if (cancelled || handledEnd.current) return;
+                        clearTimeout(transitionTimer.current);
+                        setError(playerErrors[event.data] || "YouTube no puede reproducir este vídeo.");
+                        handledEnd.current = true;
+                        latest.current.onUnavailable();
+                    },
+                    onAutoplayBlocked: () => {
+                        if (cancelled) return;
+                        clearTimeout(transitionTimer.current);
+                        setBlocked(true);
+                    },
+                },
+            });
+        }).catch(e => { if (!cancelled) setError(e.message); });
+        return () => {
+            endGesture();
+            if (player.current?.getPlayerState() === 1) persistNow.current();
+            cancelled = true;
+            clearTimeout(transitionTimer.current);
+            setReady(false);
+            player.current?.destroy();
+            player.current = null;
+            loadedId.current = null;
+        };
+    }, [fictional]);
+    // Preserve the existing progress cadence; queue operations never make API requests.
+    useEffect(() => {
+        let cancelled = false, inFlight = false, lastTime = 0;
         const persist = async () => {
-            if (video.transient) return;
             const p = player.current;
-            if (!p || inFlight || cancelled) return;
-            let seconds = 0,
-                duration = 0;
-            try {
-                seconds = p.getCurrentTime();
-                duration = p.getDuration();
-            } catch {
-                return;
-            }
-            if (
-                !Number.isFinite(seconds) ||
-                seconds < 0 ||
-                !Number.isFinite(duration) ||
-                duration <= 0
-            )
-                return;
-            if (Math.abs(seconds - lastTime) < 1) return;
+            if (!p || video.transient || inFlight || cancelled || !hasPlayed.current || loadedId.current !== video.id) return;
+            const seconds = p.getCurrentTime(), duration = p.getDuration();
+            if (!Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(duration) || duration <= 0 || Math.abs(seconds - lastTime) < 1) return;
             lastTime = seconds;
             inFlight = true;
             try {
-                const result = await api<Video>(
-                    `/api/videos/${video.id}/progress`,
-                    "PUT",
-                    {
-                        positionSeconds: seconds,
-                        durationSeconds: duration,
-                        revision: revisionRef.current,
-                    },
-                );
-                if (
-                    !cancelled &&
-                    (result.revision ?? 0) >= revisionRef.current
-                ) {
-                    revisionRef.current =
-                        result.revision ?? revisionRef.current;
+                const result = await api<Video>(`/api/videos/${video.id}/progress`, "PUT", {
+                    positionSeconds: seconds, durationSeconds: duration, revision: revisionRef.current,
+                });
+                if (!cancelled && (result.revision ?? 0) >= revisionRef.current) {
+                    revisionRef.current = result.revision ?? revisionRef.current;
                     callback.current(result);
                     setSaveError("");
                 }
             } catch {
-                if (!cancelled)
-                    setSaveError(
-                        "No se ha podido guardar el progreso. La reproducción continúa.",
-                    );
-            } finally {
-                inFlight = false;
-            }
+                if (!cancelled) setSaveError("No se ha podido guardar el progreso. La reproducción continúa.");
+            } finally { inFlight = false; }
         };
-        loadYouTube()
-            .then(() => {
-                if (cancelled || !host.current || !window.YT) return;
-                const mount = document.createElement("div");
-                host.current.replaceChildren(mount);
-                player.current = new window.YT.Player(mount, {
-                    videoId: video.id,
-                    width: "100%",
-                    height: "100%",
-                    playerVars: {
-                        playsinline: 1,
-                        iv_load_policy: 3,
-                        rel: 0,
-                        origin: window.location.origin,
-                        start: Math.floor(position.current),
-                    },
-                    events: {
-                        onReady: () => {
-                            if (cancelled) return;
-                            setReady(true);
-                            setError("");
-                            const p = player.current;
-                            if (p) {
-                                p.getIframe().title =
-                                    "Reproductor oficial de YouTube";
-                            }
-                            if (!video.transient)
-                                timer = window.setInterval(() => {
-                                    if (player.current?.getPlayerState() === 1)
-                                        void persist();
-                                }, 30000);
-                        },
-                        onStateChange: (event: { data: number }) => {
-                            if (event.data === 0 || event.data === 2)
-                                void persist();
-                        },
-                        onError: (event: { data: number }) =>
-                            setError(
-                                playerErrors[event.data] ||
-                                    "YouTube no puede reproducir este vídeo. Puedes abrirlo en YouTube.",
-                            ),
-                        onAutoplayBlocked: () =>
-                            setError(
-                                "Pulsa el botón de reproducción dentro del reproductor de YouTube para empezar.",
-                            ),
-                    },
-                });
-            })
-            .catch((e) => {
-                if (!cancelled) setError(e.message);
-            });
+        persistNow.current = () => { void persist(); };
+        const timer = window.setInterval(() => {
+            if (player.current?.getPlayerState() === 1) void persist();
+        }, 30000);
         return () => {
-            endGesture();
-            setReady(false);
             if (player.current?.getPlayerState() === 1) void persist();
             cancelled = true;
             clearInterval(timer);
-            player.current?.destroy();
-            player.current = null;
         };
-    }, [fictional, video.id, video.transient, revisionRef]);
+    }, [video.id, video.transient, revisionRef]);
+    useEffect(() => {
+        if (!ready || !player.current || loadedId.current === video.id) return;
+        clearTimeout(transitionTimer.current);
+        endGesture();
+        setError(""); setSaveError(""); setBlocked(false);
+        handledEnd.current = false;
+        hasPlayed.current = false;
+        loadedId.current = video.id;
+        // A silent failure must leave an explicit recovery action, not skip slow videos.
+        transitionTimer.current = window.setTimeout(() => setBlocked(true), 15000);
+        try {
+            player.current.loadVideoById({ videoId: video.id, startSeconds: Math.floor(video.positionSeconds) });
+        } catch {
+            clearTimeout(transitionTimer.current);
+            setError("No se pudo cargar el vídeo. Puedes saltar al siguiente.");
+            handledEnd.current = true;
+            latest.current.onUnavailable();
+        }
+    }, [video.id, ready]);
     return (
         <section className="player-section" aria-label="Reproducción">
             <div className="player-viewport">
@@ -297,6 +311,7 @@ export function Player({
                     </>
                 )}
             </div>
+            {blocked && <p className="player-notice" role="status">La reproducción necesita tu intervención. <button className="button small" onClick={() => player.current?.playVideo()}>Continuar reproducción</button> Si no arranca, pulsa ▶ en el reproductor de YouTube.</p>}
             {error && (
                 <p className="player-notice" role="alert">
                     {error}{" "}

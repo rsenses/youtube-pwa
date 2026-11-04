@@ -1825,9 +1825,7 @@ label > textarea {
     padding: 8px 16px;
 }
 .mini-player-return::before {
-    position: absolute;
-    inset: 0 52px 0 0;
-    content: "";
+    content: none;
 }
 .mini-player-title,
 .mini-player-channel {
@@ -2315,6 +2313,26 @@ label > textarea {
     .watching .player-notice {
         display: none;
     }
+}
+.queue-toolbar { display: flex; gap: 8px; padding: 10px 0; }
+.playback-queue { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); max-height: 45dvh; overflow: auto; }
+.playback-queue ol { padding: 0; margin: 0; list-style: none; }
+.queue-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.queue-item img { width: 72px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; }
+.queue-item span, .queue-video { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.queue-item small { display: block; color: var(--muted); }
+.queue-item > button:not(.queue-video) { flex-shrink: 0; min-width: 32px; min-height: 40px; }
+/* YouTube requires an embedded viewport of at least 200 × 200. */
+.mini-player .watch-primary { display: grid; grid-template-columns: 200px minmax(0, 1fr); height: auto; min-height: 200px; max-height: calc(100dvh - 140px); overflow: auto; }
+.mini-player .player-section { grid-column: 1; grid-row: 1 / 3; width: 200px; pointer-events: auto; }
+.mini-player .player-viewport { width: 200px; height: 200px; aspect-ratio: auto; }
+.mini-player-controls { grid-column: 2; grid-row: 1; height: auto; }
+.mini-player .queue-toolbar { grid-column: 2; grid-row: 2; flex-wrap: wrap; padding: 8px; }
+.mini-player .playback-queue { grid-column: 1 / -1; width: 100%; }
+.mini-player .player-notice { display: block; }
+.page-main.has-mini-player { padding-bottom: calc(300px + env(safe-area-inset-bottom)); }
+@media (orientation: landscape) and (max-height: 600px) {
+    .watching .player-notice { display: block; position: fixed; bottom: 0; left: 0; right: 0; z-index: 81; background: var(--surface); }
 }
 @media (prefers-reduced-motion: reduce) {
     ::view-transition-group(*),
