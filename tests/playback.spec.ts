@@ -20,13 +20,21 @@ test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autopla
     }}; window.onYouTubeIframeAPIReady();
   ` }));
   await page.goto("/feed");
-  await page.getByRole("button", { name: "Añadir a la cola: Vídeo 1", exact: true }).click();
+  const addToQueue = async (n: number) => {
+    const options = page.getByRole("button", { name: `Opciones de Vídeo ${n}`, exact: true });
+    await expect(page.getByRole("button", { name: /^Añadir a la cola/ })).toHaveCount(0);
+    await expect(page.locator(".video-card").filter({ has: options }).locator(".card-actions > button")).toHaveCount(0);
+    await options.click();
+    await page.getByRole("button", { name: "Añadir a la cola", exact: true }).click();
+    await expect(options).toHaveAttribute("aria-expanded", "false");
+  };
+  await addToQueue(1);
   const iframe = page.locator(".youtube-host iframe");
   await expect(iframe).toBeVisible();
   const identity = await iframe.elementHandle();
   await expect(page).toHaveURL(/\/feed/);
   await expect.poll(() => page.evaluate(() => (window as any).mock.plays)).toBe(0);
-  for (const n of [2, 3, 4]) await page.getByRole("button", { name: `Añadir a la cola: Vídeo ${n}`, exact: true }).click();
+  for (const n of [2, 3, 4]) await addToQueue(n);
   await page.getByRole("button", { name: "Cola (3)", exact: true }).click();
   await expect(page.locator(".playback-queue li")).toHaveCount(3);
   await page.getByRole("button", { name: "Subir Vídeo 3", exact: true }).click();
@@ -57,7 +65,7 @@ test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autopla
   await expect.poll(() => page.evaluate(() => (window as any).mock.loads.length)).toBe(3);
   await page.getByRole("link", { name: "Feed", exact: true }).last().click();
   await page.getByRole("button", { name: "Cola (0)", exact: true }).click();
-  await page.getByRole("button", { name: "Añadir a la cola: Vídeo 1", exact: true }).click();
+  await addToQueue(1);
   await page.getByRole("button", { name: "Cola (1)", exact: true }).click();
   await expect(page.locator(".playback-queue li")).toHaveCount(1);
   await page.getByRole("button", { name: "Vaciar cola", exact: true }).click();

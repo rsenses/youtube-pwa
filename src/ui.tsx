@@ -321,7 +321,7 @@ export function VideoCard({
                 )}
             </div>
             <div className="card-actions">
-                <button className="icon-button" disabled={queued} aria-label={queued ? `${video.title} ya está en la cola` : `Añadir a la cola: ${video.title}`} title={queued ? "En la cola" : "Añadir a la cola"} onClick={() => playback.add(video)}><Icon name={queued ? "check" : "lists"} size={18} /></button>
+                {!renderAction && <button className="icon-button" disabled={queued} aria-label={queued ? `${video.title} ya está en la cola` : `Añadir a la cola: ${video.title}`} title={queued ? "En la cola" : "Añadir a la cola"} onClick={() => playback.add(video)}><Icon name={queued ? "check" : "lists"} size={18} /></button>}
                 {renderAction?.({ toggleWatched: () => void toggle(), busy }) ?? action ?? (!video.transient && <button
                     className={`icon-button ${video.watched ? "active" : ""}`}
                     aria-label={

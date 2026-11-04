@@ -690,6 +690,8 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnai
   eagerThumbnail?: boolean;
   extra?: ReactNode;
 }) {
+  const playback = usePlayback();
+  const queued = playback.current === video.id || playback.pending.some(v => v.id === video.id);
   const [save, setSave] = useState(false);
   const [open, setOpen] = useState(false);
   const menuMounted = usePresence(open);
@@ -717,6 +719,10 @@ function VideoOptionsCard({ video, onChange, swipeToWatch = false, eagerThumbnai
           <Icon name="more" size={18} />
         </button>
         {menuMounted && <div className={`video-card-menu-items ${open ? "" : "is-closing"}`} inert={!open} aria-hidden={!open}>
+          <button disabled={queued} onClick={() => {
+            setOpen(false);
+            playback.add(video);
+          }}><Icon name="lists" size={17} />{queued ? "En la cola" : "Añadir a la cola"}</button>
           <button disabled={busy} onClick={() => {
             setOpen(false);
             toggleWatched();

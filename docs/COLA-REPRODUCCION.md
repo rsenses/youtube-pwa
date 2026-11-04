@@ -18,7 +18,7 @@ Fuentes consultadas:
 
 - Cola en memoria de la sesión: recargar o cerrar reproducción la descarta. Vaciar elimina solo pendientes, sin detener el actual.
 - No se duplica un vídeo actual o pendiente. Puede añadirse otra vez una vez consumido. Seleccionar un pendiente conserva los demás; abrir manualmente otro vídeo también los conserva.
-- Todas las tarjetas comparten «Añadir a la cola», sin navegación ni toast. Sin actual, se prepara ese vídeo en el minirreproductor y se inicia manualmente.
+- «Añadir a la cola» está dentro del menú de la elipsis en el feed, canales y listas, sin añadir botones visibles a esas tarjetas. Las tarjetas sin ese menú mantienen su acción directa. No navega ni muestra toast. Sin actual, se prepara ese vídeo en el minirreproductor y se inicia manualmente.
 - Los metadatos disponibles se reutilizan; no se consulta el endpoint de vídeo para los elementos añadidos. No hay tablas, endpoints, escrituras de listas ni sincronización nueva. El progreso conserva la cadencia existente (30 segundos y pausa/final); no marca vistos.
 - Un error explícito de YouTube salta al siguiente pendiente. Si no quedan, muestra el error. Una transición sin respuesta durante 15 segundos muestra una acción manual; no descarta un vídeo por una conexión lenta. «Siguiente» permite continuar en cualquier momento.
 - El bloqueo mantiene el elemento actual y ofrece «Continuar reproducción»; si Chrome sigue bloqueándolo, usar ▶ dentro del iframe. No hay reintentos automáticos ni estrategias para eludir las políticas.
