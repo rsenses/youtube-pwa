@@ -84,6 +84,14 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
   expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
   const input = page.getByRole("textbox", { name: "Buscar en YouTube" });
   await expect(input).toBeFocused();
+  const clearSearch = page.getByRole("button", { name: "Limpiar búsqueda", exact: true });
+  await expect(clearSearch).toHaveCount(0);
+  await input.fill("texto de prueba");
+  await clearSearch.click();
+  await expect(input).toHaveValue("");
+  await expect(input).toBeFocused();
+  await expect(clearSearch).toHaveCount(0);
+  expect(searched).toEqual([]);
   await input.fill("old film");
   await page.getByRole("button", { name: "Buscar", exact: true }).click();
   await expect(page.locator(".search-result .video-card")).toHaveCount(2);

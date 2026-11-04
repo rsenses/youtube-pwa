@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   ViewTransition,
@@ -83,7 +84,7 @@ function AppContent() {
   const setActiveVideoId = (id: string | null) => playback.dispatch(id ? { type: "play", id } : { type: "close" });
   const transitionEnabled = !watching && !activeVideoId;
   const hasViewTransitions = typeof document.startViewTransition === "function";
-  const routeFallback = transitionEnabled && (!hasViewTransitions || navigationType === "POP");
+  const routeFallback = !watching && (!hasViewTransitions || navigationType === "POP");
   useEffect(() => {
     if (watchId) setActiveVideoId(watchId);
   }, [watchId]);
@@ -149,7 +150,7 @@ function AppContent() {
   const routeContent = (
     <div
       className={`route-content ${routeFallback ? "route-fallback" : ""}`}
-      key={routeFallback ? location.pathname : undefined}
+      key={location.pathname}
     >
       <Routes>
         <Route path="/" element={<Navigate to="/feed" replace />} />
@@ -247,11 +248,9 @@ function AppContent() {
             location.pathname !== "/settings" ? (
               <Navigate to="/settings" replace />
             ) : (
-              transitionEnabled ? (
-                <ViewTransition default="none" update="page-fade">
-                  {routeContent}
-                </ViewTransition>
-              ) : routeContent
+              <ViewTransition default="none" update={transitionEnabled ? "page-fade" : "none"}>
+                {routeContent}
+              </ViewTransition>
             )}
           </main>
         </div>
@@ -1571,12 +1570,12 @@ function Watch({
           onEnded={advance}
           onUnavailable={advance}
         />
-        <div className="queue-toolbar">
+        {(!minimized || playback.pending.length > 0) && <div className="queue-toolbar">
           <button className="button small secondary" onClick={() => setQueueOpen(!queueOpen)} aria-expanded={queueOpen}>Cola ({playback.pending.length})</button>
           <button className="button small secondary" disabled={!playback.pending.length} onClick={advance}>Siguiente</button>
-        </div>
+        </div>}
         {error && <p role="alert">{error} {playback.pending.length > 0 && <button onClick={() => advanceFrom(requestedId)}>Saltar al siguiente</button>}</p>}
-        {queueOpen && <section className="playback-queue" aria-label="Cola de reproducción">
+        {queueOpen && (!minimized || playback.pending.length > 0) && <section className="playback-queue" aria-label="Cola de reproducción">
           <strong>Reproduciendo</strong>
           <div className="queue-item"><img src={videoThumbnail(video)} alt="" /><span>{video.title}<small>{video.channelTitle}</small></span></div>
           <div className="section-title"><h2>Pendientes</h2><button disabled={!playback.pending.length} onClick={() => playback.dispatch({ type: "clear" })}>Vaciar cola</button></div>
@@ -1785,13 +1784,14 @@ function SearchPage() {
   const query = params.get("q") || "";
   const type = params.get("type") === "channel" ? "channel" : params.get("type") === "playlist" ? "playlist" : "video";
   const [draft, setDraft] = useState(query);
+  const searchInput = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<(Video | SearchResource)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
   const generation = useRef(0);
-  useEffect(() => { setDraft(query); }, [query]);
+  useLayoutEffect(() => { setDraft(query); }, [query]);
   useEffect(() => {
     generation.current++;
     const current = generation.current;
@@ -1841,8 +1841,12 @@ function SearchPage() {
       if (next.length >= 2 && next.length <= 120) setParams(type === "video" ? { q: next } : { q: next, type });
     }}>
       <Icon name="search" size={20} />
-      <input autoFocus aria-label="Buscar en YouTube" placeholder="Buscar en YouTube" value={draft}
+      <input ref={searchInput} autoFocus aria-label="Buscar en YouTube" placeholder="Buscar en YouTube" value={draft}
         maxLength={120} onChange={(event) => setDraft(event.target.value)} />
+      {draft && <button type="button" className="icon-button" aria-label="Limpiar búsqueda" title="Limpiar búsqueda" onClick={() => {
+        setDraft("");
+        searchInput.current?.focus();
+      }}><Icon name="close" size={18} /></button>}
       <button className="button small" disabled={draft.trim().length < 2 || busy}>Buscar</button>
     </form>
     <div className="segmented search-tabs" aria-label="Tipo de resultado">

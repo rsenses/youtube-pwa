@@ -2322,11 +2322,19 @@ label > textarea {
 .queue-item span, .queue-video { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
 .queue-item small { display: block; color: var(--muted); }
 .queue-item > button:not(.queue-video) { flex-shrink: 0; min-width: 32px; min-height: 40px; }
-/* YouTube requires an embedded viewport of at least 200 × 200. */
+/* Keep the queue layout spacious; the queue-free widget uses the compact 16:9 layout. */
 .mini-player .watch-primary { display: grid; grid-template-columns: 200px minmax(0, 1fr); height: auto; min-height: 200px; max-height: calc(100dvh - 140px); overflow: auto; }
 .mini-player .player-section { grid-column: 1; grid-row: 1 / 3; width: 200px; pointer-events: auto; }
 .mini-player .player-viewport { width: 200px; height: 200px; aspect-ratio: auto; }
 .mini-player-controls { grid-column: 2; grid-row: 1; height: auto; }
+.mini-player .watch-primary:not(:has(.queue-toolbar)) { grid-template-columns: 170px minmax(0, 1fr); min-height: 0; }
+.mini-player .watch-primary:not(:has(.queue-toolbar)) .player-section { width: 170px; }
+.mini-player .watch-primary:not(:has(.queue-toolbar)) .player-viewport { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.mini-player .watch-primary:not(:has(.queue-toolbar)) .mini-player-controls { grid-row: 1 / 3; min-height: 0; }
+@media (max-width: 700px) {
+    .mini-player .watch-primary:not(:has(.queue-toolbar)) { grid-template-columns: 135px minmax(0, 1fr); }
+    .mini-player .watch-primary:not(:has(.queue-toolbar)) .player-section { width: 135px; }
+}
 .mini-player .queue-toolbar { grid-column: 2; grid-row: 2; flex-wrap: wrap; padding: 8px; }
 .mini-player .playback-queue { grid-column: 1 / -1; width: 100%; }
 .mini-player .player-notice { display: block; }

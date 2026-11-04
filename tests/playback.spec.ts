@@ -7,8 +7,12 @@ const videos = ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd"].map(
 }));
 test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autoplay", async ({ page }) => {
   const requests: string[] = [];
+  let feedRequests = 0;
   page.on("request", request => { if (request.url().includes("/api/videos/")) requests.push(request.method() + " " + new URL(request.url()).pathname); });
-  await page.route("**/api/feed?*", route => route.fulfill({ json: { items: videos, nextCursor: null } }));
+  await page.route("**/api/feed?*", route => {
+    feedRequests++;
+    return route.fulfill({ json: { items: videos, nextCursor: null } });
+  });
   await page.route("https://www.youtube.com/iframe_api", route => route.fulfill({ contentType: "application/javascript", body: `
     window.mock = { constructs: 0, destroys: 0, loads: [], plays: 0 };
     window.YT = { Player: class {
@@ -28,7 +32,12 @@ test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autopla
     await page.getByRole("button", { name: "Añadir a la cola", exact: true }).click();
     await expect(options).toHaveAttribute("aria-expanded", "false");
   };
+  await expect(page.locator(".video-grid .video-card")).toHaveCount(4);
+  const originalFeed = await page.locator(".video-grid").elementHandle();
   await addToQueue(1);
+  expect(await page.locator(".video-grid").evaluate((el, original) => el === original, originalFeed)).toBe(true);
+  await expect(page.getByRole("button", { name: "Cola (0)", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Siguiente", exact: true })).toHaveCount(0);
   const iframe = page.locator(".youtube-host iframe");
   await expect(iframe).toBeVisible();
   const identity = await iframe.elementHandle();
@@ -64,15 +73,31 @@ test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autopla
   await page.getByRole("link", { name: "Ver Vídeo 4", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).mock.loads.length)).toBe(3);
   await page.getByRole("link", { name: "Feed", exact: true }).last().click();
-  await page.getByRole("button", { name: "Cola (0)", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Cola (0)", exact: true })).toHaveCount(0);
+  await expect(page.locator(".playback-queue")).toHaveCount(0);
   await addToQueue(1);
-  await page.getByRole("button", { name: "Cola (1)", exact: true }).click();
   await expect(page.locator(".playback-queue li")).toHaveCount(1);
   await page.getByRole("button", { name: "Vaciar cola", exact: true }).click();
-  await expect(page.locator(".playback-queue li")).toHaveCount(0);
+  await expect(page.locator(".playback-queue")).toHaveCount(0);
+  await expect(page.locator(".queue-toolbar")).toHaveCount(0);
   await expect(page.locator(".mini-player")).toHaveCSS("opacity", "1");
+  const compactViewport = await page.locator(".mini-player .player-viewport").boundingBox();
+  expect(compactViewport!.width / compactViewport!.height).toBeCloseTo(16 / 9, 2);
+  expect(compactViewport!.width).toBe(135);
+  const compactWidget = await page.locator(".mini-player").boundingBox();
+  expect(compactWidget!.height).toBeLessThan(100);
   await page.screenshot({ path: "/tmp/alveo-playback-queue.png" });
   expect(await iframe.evaluate((el, original) => el === original, identity)).toBe(true);
   expect(await page.evaluate(() => ({ constructs: (window as any).mock.constructs, destroys: (window as any).mock.destroys }))).toEqual({ constructs: 1, destroys: 0 });
   expect(requests).toEqual([]);
+  const feed = await page.locator(".video-grid").elementHandle();
+  await page.evaluate(() => window.scrollTo(0, 150));
+  const scroll = await page.evaluate(() => window.scrollY);
+  expect(scroll).toBeGreaterThan(0);
+  const requestsBeforeClose = feedRequests;
+  await page.getByRole("button", { name: "Cerrar reproducción", exact: true }).click();
+  await expect(page.locator(".mini-player")).toHaveCount(0);
+  expect(await page.locator(".video-grid").evaluate((el, original) => el === original, feed)).toBe(true);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
+  expect(feedRequests).toBe(requestsBeforeClose);
 });
