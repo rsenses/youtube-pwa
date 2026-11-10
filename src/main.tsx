@@ -1570,12 +1570,12 @@ function Watch({
           onEnded={advance}
           onUnavailable={advance}
         />
-        {(!minimized || playback.pending.length > 0) && <div className="queue-toolbar">
+        {playback.pending.length > 0 && <div className="queue-toolbar">
           <button className="button small secondary" onClick={() => setQueueOpen(!queueOpen)} aria-expanded={queueOpen}>Cola ({playback.pending.length})</button>
           <button className="button small secondary" disabled={!playback.pending.length} onClick={advance}>Siguiente</button>
         </div>}
         {error && <p role="alert">{error} {playback.pending.length > 0 && <button onClick={() => advanceFrom(requestedId)}>Saltar al siguiente</button>}</p>}
-        {queueOpen && (!minimized || playback.pending.length > 0) && <section className="playback-queue" aria-label="Cola de reproducción">
+        {queueOpen && playback.pending.length > 0 && <section className="playback-queue" aria-label="Cola de reproducción">
           <strong>Reproduciendo</strong>
           <div className="queue-item"><img src={videoThumbnail(video)} alt="" /><span>{video.title}<small>{video.channelTitle}</small></span></div>
           <div className="section-title"><h2>Pendientes</h2><button disabled={!playback.pending.length} onClick={() => playback.dispatch({ type: "clear" })}>Vaciar cola</button></div>

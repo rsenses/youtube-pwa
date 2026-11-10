@@ -67,7 +67,9 @@ test("cola: mismo iframe al añadir, navegar, rotar, avanzar y recuperar autopla
   await page.evaluate(() => (window as any).mock.player.options.events.onError({data: 150}));
   await expect.poll(() => page.evaluate(() => (window as any).mock.loads.length)).toBe(2);
   await expect(page).toHaveURL(new RegExp(`/watch/${videos[1].id}$`));
-  await expect(page.getByRole("button", { name: "Siguiente", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Cola (0)", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Siguiente", exact: true })).toHaveCount(0);
+  await expect(page.locator(".playback-queue")).toHaveCount(0);
   await page.getByRole("link", { name: "Feed", exact: true }).last().click();
   await expect(page.locator(".mini-player")).toBeVisible();
   await page.getByRole("link", { name: "Ver Vídeo 4", exact: true }).click();
