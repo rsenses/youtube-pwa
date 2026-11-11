@@ -486,6 +486,9 @@ test("embed directo, progreso y mismo iframe al rotar sin autoplay ni fullscreen
       value: async (data: ShareData) => (window as any).__shared.push(data.url),
     });
   });
+  const download = page.getByRole("link", { name: "Descargar vídeo en Cobalt" });
+  await expect(download).toHaveAttribute("href", "https://cobalt.meowing.de/#https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DM7lc1UVf-VE");
+  await expect(download).toHaveAttribute("target", "_blank");
   await page.getByRole("button", { name: "Compartir vídeo" }).click();
   expect(await page.evaluate(() => (window as any).__shared)).toEqual([
     "https://www.youtube.com/watch?v=M7lc1UVf-VE",

@@ -1682,6 +1682,16 @@ function Watch({
               </button>
               <a
                 className="icon-button"
+                href={`https://cobalt.meowing.de/#${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Descargar vídeo en Cobalt"
+                title="Descargar vídeo en Cobalt"
+              >
+                <Icon name="download" size={18} />
+              </a>
+              <a
+                className="icon-button"
                 href={`https://www.youtube.com/watch?v=${id}`}
                 target="_blank"
                 rel="noopener"

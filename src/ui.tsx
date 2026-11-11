@@ -46,6 +46,12 @@ export function Icon({ name, size = 22 }: { name: string; size?: number }) {
                 <path d="M5 13v7h14v-7" />
             </>
         ),
+        download: (
+            <>
+                <path d="M12 3v13m0 0 5-5m-5 5-5-5" />
+                <path d="M5 18v3h14v-3" />
+            </>
+        ),
         search: (
             <>
                 <circle cx="10" cy="10" r="6" />
