@@ -484,6 +484,8 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
       if (url.pathname.endsWith("/search")) {
         expect(url.searchParams.get("q")).toBe("old film");
         expect(url.searchParams.get("maxResults")).toBe("20");
+        expect(url.searchParams.get("videoEmbeddable")).toBe("true");
+        expect(url.searchParams.has("videoSyndicated")).toBe(false);
         expect(url.searchParams.has("publishedAfter")).toBe(false);
         return Response.json({
           items: url.searchParams.has("pageToken")
@@ -504,7 +506,7 @@ describe("D1 synchronization outcomes with mocked external responses", () => {
     }));
     try {
       const first = await searchPublicVideos(env, "old film");
-      expect(first.items.map((item) => item.id)).toEqual([firstId]);
+      expect(first.items.map((item) => item.id)).toEqual([firstId, shortId]);
       expect(first.items[0].transient).toBe(true);
       expect(first.nextPageToken).toBe("NEXT");
       const callCount = calls.length;

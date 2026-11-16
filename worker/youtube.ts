@@ -305,7 +305,7 @@ export async function searchResources(
 export async function searchVideos(
   credential: ReadCredential,
   query: string,
-  options: { maxResults?: number; pageToken?: string } = {},
+  options: { maxResults?: number; pageToken?: string; syndicatedOnly?: boolean } = {},
 ): Promise<YouTubeSearchList> {
   return (await requestJson(credential, "GET", "search", {
     part: "snippet",
@@ -315,7 +315,7 @@ export async function searchVideos(
     ...(options.pageToken ? { pageToken: options.pageToken } : {}),
     order: "relevance",
     videoEmbeddable: "true",
-    videoSyndicated: "true",
+    ...(options.syndicatedOnly === false ? {} : { videoSyndicated: "true" }),
     fields: "nextPageToken,items(id/videoId)",
   })) as unknown as YouTubeSearchList;
 }
