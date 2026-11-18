@@ -1893,7 +1893,7 @@ function SearchResourceCard({ resource, type, query }: { resource: SearchResourc
 }
 function SearchVideoCard({ video }: { video: Video }) {
   const [save, setSave] = useState(false);
-  return <div className="search-result"><VideoCard video={video} action={<button className="icon-button" aria-label={`Guardar ${video.title} en una lista`}
+  return <div className="search-result"><VideoCard video={video} showViews action={<button className="icon-button" aria-label={`Guardar ${video.title} en una lista`}
     aria-expanded={save} title="Guardar en una lista" onClick={() => setSave((value) => !value)}>
     <Icon name="save" size={18} />
   </button>} /><MotionPanel open={save}><SaveVideo id={video.id} onDone={() => setSave(false)} /></MotionPanel></div>;

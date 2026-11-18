@@ -160,6 +160,7 @@ export function VideoCard({
     compact = false,
     swipeToWatch = false,
     eagerThumbnail = false,
+    showViews = false,
     extra,
     action,
     renderAction,
@@ -169,6 +170,7 @@ export function VideoCard({
     compact?: boolean;
     swipeToWatch?: boolean;
     eagerThumbnail?: boolean;
+    showViews?: boolean;
     extra?: ReactNode;
     action?: ReactNode;
     renderAction?: (controls: { toggleWatched: () => void; busy: boolean }) => ReactNode;
@@ -311,7 +313,9 @@ export function VideoCard({
                     </time>
                     <span>·</span>
                     <span>
-                        {video.transient
+                        {showViews && video.viewCount != null
+                            ? `${new Intl.NumberFormat("es", { notation: "compact" }).format(video.viewCount)} visualizaciones`
+                            : video.transient
                             ? "Descubierto en YouTube"
                             : video.watched
                             ? "Visto"

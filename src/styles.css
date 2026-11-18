@@ -1583,47 +1583,6 @@ label > textarea {
     height: 100%;
     border: 0;
 }
-.volume-gesture-zone {
-    position: absolute;
-    z-index: 1;
-    top: 24%;
-    right: 8px;
-    bottom: 54%;
-    width: clamp(48px, 8%, 72px);
-    background: rgb(0 0 0 / 1%);
-    touch-action: none;
-}
-.volume-indicator {
-    position: absolute;
-    z-index: 2;
-    top: 50%;
-    right: calc(clamp(48px, 8%, 72px) + 20px);
-    width: 64px;
-    height: 140px;
-    padding: 8px 4px;
-    transform: translateY(-50%);
-    border-radius: 14px;
-    background: rgb(20 17 19 / 78%);
-    color: white;
-    font-size: 11px;
-    font-weight: 700;
-    text-align: center;
-    white-space: pre-line;
-    pointer-events: none;
-}
-.volume-indicator::after {
-    position: absolute;
-    right: 15px;
-    bottom: 24px;
-    left: 15px;
-    height: 64px;
-    border-radius: 8px;
-    background: var(--accent);
-    content: "";
-    transform: scaleY(calc(var(--volume) * 0.01));
-    transform-origin: bottom;
-}
-.volume-indicator[hidden] { display: none; }
 .player-placeholder {
     padding: 24px;
     color: #fff;
@@ -1798,8 +1757,6 @@ label > textarea {
     flex: 0 0 170px;
     pointer-events: none;
 }
-.mini-player .volume-gesture-zone,
-.mini-player .volume-indicator { display: none; }
 .mini-player .player-viewport {
     border-radius: 0;
 }

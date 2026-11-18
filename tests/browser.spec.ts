@@ -70,7 +70,7 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
       channelId: "UC" + "s".repeat(22), channelTitle: "Canal de prueba", thumbnailUrl: "",
       publishedAt: "2020-01-01T00:00:00Z", description: "", durationSeconds: 120,
       isLive: false, liveBroadcastContent: "none", watched: false, positionSeconds: 0,
-      percent: 0, manual: false, viewCount: null, revision: 0 }], nextPageToken: next ? null : "NEXT" } });
+      percent: 0, manual: false, viewCount: next ? 0 : 12345, revision: 0 }], nextPageToken: next ? null : "NEXT" } });
   });
   await page.route("**/api/playlists", (route) => route.fulfill({ json: { items: [
     { id: "list-1", title: "Favoritos", source: "local", itemCount: 0 },
@@ -95,6 +95,8 @@ test("búsqueda global enfoca el campo, pagina y guarda sin marcar visto", async
   await input.fill("old film");
   await page.getByRole("button", { name: "Buscar", exact: true }).click();
   await expect(page.locator(".search-result .video-card")).toHaveCount(2);
+  await expect(page.locator(".search-result .video-meta").filter({ hasText: "12 mil visualizaciones" })).toHaveCount(1);
+  await expect(page.locator(".search-result .video-meta").filter({ hasText: "0 visualizaciones" })).toHaveCount(1);
   await expect(page.locator(".search-result").getByRole("button", { name: "Marcar visto" })).toHaveCount(0);
   await page.getByRole("button", { name: "Guardar Primer vídeo en una lista" }).click();
   await page.getByRole("button", { name: /Favoritos/ }).click();

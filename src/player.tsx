@@ -8,11 +8,6 @@ interface YTPlayer {
     getDuration(): number;
     getPlayerState(): number;
     getIframe(): HTMLIFrameElement;
-    getVolume(): number;
-    setVolume(volume: number): void;
-    isMuted(): boolean;
-    mute(): void;
-    unMute(): void;
 }
 interface YTConstructor {
     new (element: HTMLElement, options: Record<string, unknown>): YTPlayer;
@@ -95,63 +90,7 @@ export function Player({
     const hasPlayed = useRef(true);
     const transitionTimer = useRef<number | undefined>(undefined);
     const [blocked, setBlocked] = useState(false);
-    const volumeIndicator = useRef<HTMLDivElement>(null);
-    const gesture = useRef<{ pointerId: number; startY: number; startVolume: number; target: number; active: boolean; verified: boolean } | null>(null);
-    const volumeCheck = useRef<number | undefined>(undefined);
     callback.current = onProgress;
-    const hideVolume = () => {
-        if (volumeIndicator.current) volumeIndicator.current.hidden = true;
-    };
-    const endGesture = () => {
-        gesture.current = null;
-        window.clearTimeout(volumeCheck.current);
-        volumeCheck.current = undefined;
-        hideVolume();
-    };
-    const showVolume = (volume: number, status = "") => {
-        const indicator = volumeIndicator.current;
-        if (!indicator) return;
-        indicator.style.setProperty("--volume", String(volume));
-        indicator.textContent = `${volume}%${status ? `\n${status}` : ""}`;
-        indicator.hidden = false;
-    };
-    const onGestureMove = (event: React.PointerEvent<HTMLDivElement>) => {
-        const current = gesture.current;
-        const p = player.current;
-        if (!current || event.pointerId !== current.pointerId || !p) return;
-        const distance = current.startY - event.clientY;
-        if (!current.active && Math.abs(distance) < 12) return;
-        current.active = true;
-        const volume = Math.max(0, Math.min(100, Math.round(
-            current.startVolume + distance / (event.currentTarget.parentElement?.clientHeight || event.currentTarget.clientHeight) * 100,
-        )));
-        if (volume === current.target) return;
-        current.target = volume;
-        try {
-            if (volume > 0 && p.isMuted()) p.unMute();
-            if (volume === 0) p.mute();
-            p.setVolume(volume);
-        } catch {
-            endGesture();
-            return;
-        }
-        if (current.verified) showVolume(volume);
-        if (volumeCheck.current !== undefined) return;
-        volumeCheck.current = window.setTimeout(() => {
-            volumeCheck.current = undefined;
-            if (gesture.current !== current) return;
-            try {
-                const actual = p.getVolume();
-                current.verified = Number.isFinite(actual) && Math.abs(actual - current.target) <= 1 && (current.target === 0 || !p.isMuted());
-                if (Number.isFinite(actual))
-                    showVolume(actual, current.verified ? "" : "Sin cambio");
-                else if (volumeIndicator.current) volumeIndicator.current.textContent = "No disponible";
-            } catch {
-                current.verified = false;
-                if (volumeIndicator.current) volumeIndicator.current.textContent = "No disponible";
-            }
-        }, 120);
-    };
     const persistNow = useRef<() => void>(() => {});
     useEffect(() => {
         if (fictional || !host.current) return;
@@ -209,7 +148,6 @@ export function Player({
             });
         }).catch(e => { if (!cancelled) setError(e.message); });
         return () => {
-            endGesture();
             if (player.current?.getPlayerState() === 1) persistNow.current();
             cancelled = true;
             clearTimeout(transitionTimer.current);
@@ -255,7 +193,6 @@ export function Player({
     useEffect(() => {
         if (!ready || !player.current || loadedId.current === video.id) return;
         clearTimeout(transitionTimer.current);
-        endGesture();
         setError(""); setSaveError(""); setBlocked(false);
         handledEnd.current = false;
         hasPlayed.current = false;
@@ -281,34 +218,6 @@ export function Player({
                     </p>
                 ) : (
                     <div className="youtube-host" ref={host} />
-                )}
-                {ready && !fictional && (
-                    <>
-                        <div className="volume-gesture-zone" onPointerDown={(event) => {
-                            if (event.pointerType !== "touch" || !player.current) return;
-                            try {
-                                const volume = player.current.getVolume();
-                                if (!Number.isFinite(volume)) {
-                                    if (volumeIndicator.current) {
-                                        volumeIndicator.current.textContent = "No disponible";
-                                        volumeIndicator.current.hidden = false;
-                                    }
-                                    return;
-                                }
-                                showVolume(volume, player.current.isMuted() ? "Silencio" : "");
-                                gesture.current = {
-                                    pointerId: event.pointerId,
-                                    startY: event.clientY,
-                                    startVolume: volume,
-                                    target: volume,
-                                    active: false,
-                                    verified: false,
-                                };
-                                event.currentTarget.setPointerCapture(event.pointerId);
-                            } catch { /* The player may still be initializing. */ }
-                        }} onPointerMove={onGestureMove} onPointerUp={endGesture} onPointerCancel={endGesture} aria-hidden="true" />
-                        <div className="volume-indicator" ref={volumeIndicator} hidden aria-hidden="true" />
-                    </>
                 )}
             </div>
             {blocked && <p className="player-notice" role="status">La reproducción necesita tu intervención. <button className="button small" onClick={() => player.current?.playVideo()}>Continuar reproducción</button> Si no arranca, pulsa ▶ en el reproductor de YouTube.</p>}
