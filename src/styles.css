@@ -1604,6 +1604,20 @@ label > textarea {
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
+.player-save-error {
+    margin: 6px 0 0;
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+@media (orientation: landscape) {
+    .player-save-error {
+        display: none;
+    }
+}
 .player-notice a {
     text-decoration: underline;
 }

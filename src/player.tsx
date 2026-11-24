@@ -234,7 +234,7 @@ export function Player({
                 </p>
             )}
             {saveError && (
-                <p className="player-notice" role="status">
+                <p className="player-save-error" role="status">
                     {saveError}
                 </p>
             )}
